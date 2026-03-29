@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Obecné",
-    "models": "Modely",
+    "models": "Transcription Models",
     "advanced": "Pokročilé",
     "postProcessing": "Následné zpracování",
     "history": "Historie",
     "debug": "Ladění",
-    "about": "O aplikaci"
+    "about": "O aplikaci",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",

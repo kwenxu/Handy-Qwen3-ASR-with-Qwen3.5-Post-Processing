@@ -13,6 +13,12 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return model.supported_languages.includes(langCode);
 };
 
+const getAvailableModelPriority = (model: ModelInfo): number => {
+  if (model.id === "qwen3-asr") return 0;
+  if (model.id === "qwen3-asr-1.7b") return 1;
+  return 100;
+};
+
 export const ModelsSettings: React.FC = () => {
   const { t } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
@@ -187,6 +193,16 @@ export const ModelsSettings: React.FC = () => {
       if (b.id === currentModel) return 1;
       if (a.is_custom !== b.is_custom) return a.is_custom ? 1 : -1;
       return 0;
+    });
+
+    available.sort((a, b) => {
+      const priorityDiff =
+        getAvailableModelPriority(a) - getAvailableModelPriority(b);
+      if (priorityDiff !== 0) return priorityDiff;
+      if (a.is_recommended !== b.is_recommended) {
+        return a.is_recommended ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
     });
 
     return {

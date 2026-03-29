@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Общие",
-    "models": "Модели",
+    "models": "Transcription Models",
     "advanced": "Продвинутые",
     "postProcessing": "Постобработка",
     "history": "История",
     "debug": "Отладка",
-    "about": "О программе"
+    "about": "О программе",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Для начала выберите модель транскрипции",

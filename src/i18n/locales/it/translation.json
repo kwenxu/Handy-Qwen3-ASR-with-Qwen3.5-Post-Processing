@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Generale",
-    "models": "Modelli",
+    "models": "Transcription Models",
     "advanced": "Avanzate",
     "postProcessing": "Post-Elaborazione",
     "history": "Cronologia",
     "debug": "Debug",
-    "about": "Informazioni"
+    "about": "Informazioni",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Per cominciare, scegli un modello di riconoscimento vocale",

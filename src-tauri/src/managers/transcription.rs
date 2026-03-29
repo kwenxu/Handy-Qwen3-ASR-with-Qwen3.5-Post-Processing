@@ -386,6 +386,11 @@ impl TranscriptionManager {
                     anyhow::anyhow!(error_msg)
                 })?;
                 let mut engine = Qwen3Engine::new();
+                let qwen_settings = get_settings(&self.app_handle);
+                engine.configure_runtime(
+                    qwen_settings.qwen3_server_ready_timeout_sec,
+                    qwen_settings.qwen3_max_threads,
+                );
                 let model_ref = model_path
                     .to_string_lossy()
                     .trim_start_matches("mlx://")
@@ -645,7 +650,9 @@ impl TranscriptionManager {
                             };
                             let result = qwen3_engine
                                 .transcribe_samples(audio, Some(params))
-                                .map_err(|e| anyhow::anyhow!("Qwen3 transcription failed: {}", e))?;
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Qwen3 transcription failed: {}", e)
+                                })?;
                             Ok(transcribe_rs::TranscriptionResult {
                                 text: result.text,
                                 segments: None,

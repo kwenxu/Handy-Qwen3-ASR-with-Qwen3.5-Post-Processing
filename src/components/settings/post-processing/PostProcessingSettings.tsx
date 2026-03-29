@@ -19,12 +19,42 @@ import { BaseUrlField } from "../PostProcessingSettingsApi/BaseUrlField";
 import { ApiKeyField } from "../PostProcessingSettingsApi/ApiKeyField";
 import { ModelSelect } from "../PostProcessingSettingsApi/ModelSelect";
 import { usePostProcessProviderState } from "../PostProcessingSettingsApi/usePostProcessProviderState";
-import { ShortcutInput } from "../ShortcutInput";
 import { useSettings } from "../../../hooks/useSettings";
+import { LocalQwen35Models } from "./LocalQwen35Models";
+import { LocalPostProcessAdvancedSettings } from "./LocalPostProcessAdvancedSettings";
+
+type PromptTemplate = {
+  id: string;
+  name: string;
+  prompt: string;
+};
+
+const LOCAL_POST_PROCESS_PROVIDER_ID = "local-qwen35";
+
+const isPresetPrompt = (prompt: PromptTemplate): boolean =>
+  prompt.id.startsWith("template_") || prompt.id.startsWith("default_");
+
+const isTranslatePresetPrompt = (prompt: PromptTemplate): boolean =>
+  prompt.id.startsWith("template_translate_english");
+
+const promptSortRank = (prompt: PromptTemplate): number => {
+  if (isTranslatePresetPrompt(prompt)) return 0;
+  if (isPresetPrompt(prompt)) return 1;
+  return 2;
+};
 
 const PostProcessingSettingsApiComponent: React.FC = () => {
   const { t } = useTranslation();
   const state = usePostProcessProviderState();
+  const { getSetting, updatePostProcessModel, setPostProcessProvider } =
+    useSettings();
+  const selectedLocalPostProcessModel =
+    getSetting("post_process_models")?.[LOCAL_POST_PROCESS_PROVIDER_ID] || "";
+
+  const handleLocalModelSelect = async (modelId: string) => {
+    await updatePostProcessModel(LOCAL_POST_PROCESS_PROVIDER_ID, modelId);
+    await setPostProcessProvider(LOCAL_POST_PROCESS_PROVIDER_ID);
+  };
 
   return (
     <>
@@ -44,13 +74,30 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
         </div>
       </SettingContainer>
 
+      {state.isLocalProvider && (
+        <>
+          <LocalQwen35Models
+            selectedModelId={selectedLocalPostProcessModel}
+            onSelectModel={(modelId) => {
+              void handleLocalModelSelect(modelId);
+            }}
+            title={t("settings.postProcessing.api.localModel.title")}
+            description={t(
+              "settings.postProcessing.api.localModel.description",
+            )}
+            grouped={true}
+          />
+          <LocalPostProcessAdvancedSettings grouped={true} />
+        </>
+      )}
+
       {state.isAppleProvider ? (
         state.appleIntelligenceUnavailable ? (
           <Alert variant="error" contained>
             {t("settings.postProcessing.api.appleIntelligence.unavailable")}
           </Alert>
         ) : null
-      ) : (
+      ) : !state.isLocalProvider ? (
         <>
           {state.selectedProvider?.id === "custom" && (
             <SettingContainer
@@ -94,9 +141,9 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
             </div>
           </SettingContainer>
         </>
-      )}
+      ) : null}
 
-      {!state.isAppleProvider && (
+      {!state.isAppleProvider && !state.isLocalProvider && (
         <SettingContainer
           title={t("settings.postProcessing.api.model.title")}
           description={
@@ -148,10 +195,21 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
   const { getSetting, updateSetting, isUpdating, refreshSettings } =
     useSettings();
   const [isCreating, setIsCreating] = useState(false);
+  const currentSystemPrompt = (
+    getSetting("post_process_system_prompt") || ""
+  ).toString();
+  const [systemPromptDraft, setSystemPromptDraft] =
+    useState(currentSystemPrompt);
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
 
-  const prompts = getSetting("post_process_prompts") || [];
+  const prompts = (getSetting("post_process_prompts") ||
+    []) as PromptTemplate[];
+  const sortedPrompts = [...prompts].sort((a, b) => {
+    const rankDiff = promptSortRank(a) - promptSortRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return a.name.localeCompare(b.name);
+  });
   const selectedPromptId = getSetting("post_process_selected_prompt_id") || "";
   const selectedPrompt =
     prompts.find((prompt) => prompt.id === selectedPromptId) || null;
@@ -172,6 +230,26 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
     selectedPrompt?.name,
     selectedPrompt?.prompt,
   ]);
+
+  useEffect(() => {
+    setSystemPromptDraft(currentSystemPrompt);
+  }, [currentSystemPrompt]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const trimmed = systemPromptDraft.trim();
+      if (!trimmed || trimmed === currentSystemPrompt.trim()) return;
+      void updateSetting("post_process_system_prompt", trimmed);
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [systemPromptDraft, currentSystemPrompt, updateSetting]);
+
+  const saveSystemPrompt = () => {
+    const trimmed = systemPromptDraft.trim();
+    if (!trimmed || trimmed === currentSystemPrompt.trim()) return;
+    void updateSetting("post_process_system_prompt", trimmed);
+  };
 
   const handlePromptSelect = (promptId: string | null) => {
     if (!promptId) return;
@@ -242,6 +320,15 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
   };
 
   const hasPrompts = prompts.length > 0;
+  const presetBadge = t("settings.postProcessing.prompts.presetBadge", {
+    defaultValue: "预置",
+  });
+  const translatePresetBadge = t(
+    "settings.postProcessing.prompts.translatePresetBadge",
+    {
+      defaultValue: "翻译预置",
+    },
+  );
   const isDirty =
     !!selectedPrompt &&
     (draftName.trim() !== selectedPrompt.name ||
@@ -261,10 +348,17 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
         <div className="flex gap-2">
           <Dropdown
             selectedValue={selectedPromptId || null}
-            options={prompts.map((p) => ({
-              value: p.id,
-              label: p.name,
-            }))}
+            options={sortedPrompts.map((p) => {
+              const badge = isTranslatePresetPrompt(p)
+                ? translatePresetBadge
+                : isPresetPrompt(p)
+                  ? presetBadge
+                  : null;
+              return {
+                value: p.id,
+                label: badge ? `${p.name} · ${badge}` : p.name,
+              };
+            })}
             onSelect={(value) => handlePromptSelect(value)}
             placeholder={
               prompts.length === 0
@@ -408,6 +502,24 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
             </div>
           </div>
         )}
+        <div className="border-t border-mid-gray/20 pt-3 space-y-2">
+          <label className="text-sm font-semibold">
+            {t("settings.postProcessing.api.systemPrompt.title")}
+          </label>
+          <p className="text-xs text-mid-gray">
+            {t("settings.postProcessing.api.systemPrompt.description")}
+          </p>
+          <Textarea
+            value={systemPromptDraft}
+            onChange={(e) => setSystemPromptDraft(e.target.value)}
+            onBlur={saveSystemPrompt}
+            placeholder={t(
+              "settings.postProcessing.api.systemPrompt.placeholder",
+            )}
+            className="w-full min-h-[160px]"
+            disabled={isUpdating("post_process_system_prompt")}
+          />
+        </div>
       </div>
     </SettingContainer>
   );
@@ -427,15 +539,7 @@ export const PostProcessingSettings: React.FC = () => {
   const { t } = useTranslation();
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
-      <SettingsGroup title={t("settings.postProcessing.hotkey.title")}>
-        <ShortcutInput
-          shortcutId="transcribe_with_post_process"
-          descriptionMode="tooltip"
-          grouped={true}
-        />
-      </SettingsGroup>
-
+    <div className="max-w-5xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.postProcessing.api.title")}>
         <PostProcessingSettingsApi />
       </SettingsGroup>

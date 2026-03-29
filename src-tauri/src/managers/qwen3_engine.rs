@@ -62,10 +62,16 @@ fn runtime_dir_from_python_path(
 ) -> std::result::Result<PathBuf, Box<dyn std::error::Error>> {
     let python = PathBuf::from(python_path);
     let bin_dir = python.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Other, "Invalid Qwen3 python path: no parent")
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Invalid Qwen3 python path: no parent",
+        )
     })?;
     let venv_dir = bin_dir.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Other, "Invalid Qwen3 python path: no .venv")
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Invalid Qwen3 python path: no .venv",
+        )
     })?;
     let runtime_dir = if venv_dir.file_name().and_then(|s| s.to_str()) == Some(".venv") {
         venv_dir.parent().ok_or_else(|| {
@@ -102,8 +108,7 @@ fn resolve_python_command() -> std::result::Result<String, Box<dyn std::error::E
 }
 
 /// Get the Python command to use (embedded or system)
-fn get_python_command() -> std::result::Result<(String, Vec<String>), Box<dyn std::error::Error>>
-{
+fn get_python_command() -> std::result::Result<(String, Vec<String>), Box<dyn std::error::Error>> {
     if let Some(cached) = PYTHON_COMMAND_CACHE.get() {
         return Ok((cached.clone(), vec![]));
     }
@@ -135,6 +140,7 @@ fn run_qwen3_model_info(
     python_cmd: &str,
     python_args: &[String],
     repo_id: &str,
+    endpoint: &str,
 ) -> anyhow::Result<Qwen3ModelInfo> {
     let python_path = QWEN3_PYTHON_PATH
         .get()
@@ -157,7 +163,7 @@ fn run_qwen3_model_info(
 
     let mut cmd = Command::new(python_cmd);
     cmd.env("PYTHONDONTWRITEBYTECODE", "1");
-    cmd.env("HF_ENDPOINT", QWEN3_DEFAULT_ENDPOINT);
+    cmd.env("HF_ENDPOINT", endpoint);
     for arg in python_args {
         cmd.arg(arg);
     }
@@ -165,7 +171,7 @@ fn run_qwen3_model_info(
         .arg("-B")
         .arg(&model_info_script_path)
         .arg(repo_id)
-        .arg(QWEN3_DEFAULT_ENDPOINT)
+        .arg(endpoint)
         .output()
         .map_err(|e| {
             anyhow::anyhow!(
@@ -243,27 +249,29 @@ fn run_qwen3_model_info(
 
     // Some environments may prepend warnings/logs before JSON output.
     if let Some(last_line) = trimmed.lines().rev().find(|line| !line.trim().is_empty()) {
-        return serde_json::from_str::<Qwen3ModelInfo>(last_line.trim()).map(|model_info| {
-            info!(
-                "Qwen3 model info resolved (last-line JSON): revision={}, files={}, total={}",
-                model_info.revision,
-                model_info.files.len(),
-                model_info.total
-            );
-            model_info
-        }).map_err(|e| {
-            error!(
-                "Failed to parse Qwen3 model info JSON. last_line={}, full_stdout={}",
-                last_line.trim(),
-                trimmed
-            );
-            anyhow::anyhow!(
-                "Failed to parse Qwen3 model info JSON from {} output: {}. Last line: {}",
-                model_info_script_path.display(),
-                e,
-                last_line.trim()
-            )
-        });
+        return serde_json::from_str::<Qwen3ModelInfo>(last_line.trim())
+            .map(|model_info| {
+                info!(
+                    "Qwen3 model info resolved (last-line JSON): revision={}, files={}, total={}",
+                    model_info.revision,
+                    model_info.files.len(),
+                    model_info.total
+                );
+                model_info
+            })
+            .map_err(|e| {
+                error!(
+                    "Failed to parse Qwen3 model info JSON. last_line={}, full_stdout={}",
+                    last_line.trim(),
+                    trimmed
+                );
+                anyhow::anyhow!(
+                    "Failed to parse Qwen3 model info JSON from {} output: {}. Last line: {}",
+                    model_info_script_path.display(),
+                    e,
+                    last_line.trim()
+                )
+            });
     }
 
     error!(
@@ -277,15 +285,18 @@ fn run_qwen3_model_info(
     ))
 }
 
-pub(crate) fn resolve_qwen3_model_info(repo_id: &str) -> anyhow::Result<Qwen3ModelInfo> {
+pub(crate) fn resolve_qwen3_model_info_for_endpoint(
+    repo_id: &str,
+    endpoint: &str,
+) -> anyhow::Result<Qwen3ModelInfo> {
     let (python_cmd, python_args) = get_qwen3_python_command()
         .map_err(|e| anyhow::anyhow!("Failed to resolve Python for Qwen3 model info: {}", e))?;
-    let model_info = run_qwen3_model_info(&python_cmd, &python_args, repo_id)?;
+    let model_info = run_qwen3_model_info(&python_cmd, &python_args, repo_id, endpoint)?;
     if model_info.files.is_empty() {
         return Err(anyhow::anyhow!(
             "Qwen3 model info contains no files (repo: {}, endpoint: {})",
             repo_id,
-            QWEN3_DEFAULT_ENDPOINT
+            endpoint
         ));
     }
     Ok(model_info)
@@ -320,6 +331,8 @@ pub struct Qwen3Engine {
     child_process: Option<Arc<Mutex<Child>>>,
     stdin: Option<Arc<Mutex<ChildStdin>>>,
     stdout: Option<Arc<Mutex<BufReader<ChildStdout>>>>,
+    server_ready_timeout_secs: u64,
+    max_threads: usize,
 }
 
 /// Parameters for Qwen3 inference
@@ -355,7 +368,14 @@ impl Qwen3Engine {
             child_process: None,
             stdin: None,
             stdout: None,
+            server_ready_timeout_secs: 30,
+            max_threads: 0,
         }
+    }
+
+    pub fn configure_runtime(&mut self, server_ready_timeout_secs: u64, max_threads: usize) {
+        self.server_ready_timeout_secs = server_ready_timeout_secs.clamp(10, 120);
+        self.max_threads = max_threads.clamp(0, 16);
     }
 
     pub fn load_model(
@@ -460,6 +480,14 @@ impl Qwen3Engine {
         for arg in &python_args {
             cmd.arg(arg);
         }
+        if self.max_threads > 0 {
+            let thread_count = self.max_threads.to_string();
+            cmd.env("OMP_NUM_THREADS", &thread_count);
+            cmd.env("VECLIB_MAXIMUM_THREADS", &thread_count);
+            cmd.env("MKL_NUM_THREADS", &thread_count);
+            cmd.env("NUMEXPR_NUM_THREADS", &thread_count);
+            info!("Qwen3 runtime thread cap: {}", thread_count);
+        }
 
         let mut child = cmd
             .env("HANDY_QWEN3_MODEL", mlx_model_name)
@@ -522,7 +550,7 @@ impl Qwen3Engine {
         });
 
         // Timeout cannot be blocked by stdout read because readiness is reported via channel.
-        let timeout = std::time::Duration::from_secs(30);
+        let timeout = std::time::Duration::from_secs(self.server_ready_timeout_secs);
         let reader = match ready_rx.recv_timeout(timeout) {
             Ok(Ok(reader)) => {
                 info!(
@@ -550,7 +578,10 @@ impl Qwen3Engine {
                 let _ = child.kill();
                 return Err(Box::new(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "Timeout waiting for Qwen3 server to be ready",
+                    format!(
+                        "Timeout waiting for Qwen3 server to be ready ({}s)",
+                        self.server_ready_timeout_secs
+                    ),
                 )));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -577,10 +608,12 @@ impl Qwen3Engine {
         let model_path = self
             .model_path
             .as_ref()
-            .ok_or_else(|| Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Model not loaded",
-            )))?
+            .ok_or_else(|| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Model not loaded",
+                ))
+            })?
             .clone();
 
         let transcribe_start = std::time::Instant::now();
@@ -692,10 +725,14 @@ impl Qwen3Engine {
                 };
 
                 let parse_start = std::time::Instant::now();
-                let result: serde_json::Value = serde_json::from_str(&response_line).map_err(|e| {
-                    error!("Failed to parse response: {}. Response: {}", e, response_line);
-                    Box::new(e) as Box<dyn std::error::Error>
-                })?;
+                let result: serde_json::Value =
+                    serde_json::from_str(&response_line).map_err(|e| {
+                        error!(
+                            "Failed to parse response: {}. Response: {}",
+                            e, response_line
+                        );
+                        Box::new(e) as Box<dyn std::error::Error>
+                    })?;
                 debug!("JSON parsing took {:?}", parse_start.elapsed());
 
                 if let Some(error) = result.get("error") {
@@ -736,7 +773,10 @@ impl Qwen3Engine {
             })
         })?;
 
-        info!("Qwen3 transcription completed in {:?}", transcribe_start.elapsed());
+        info!(
+            "Qwen3 transcription completed in {:?}",
+            transcribe_start.elapsed()
+        );
 
         Ok(Qwen3TranscriptionResult { text })
     }
@@ -788,6 +828,8 @@ impl Clone for Qwen3Engine {
             child_process: None,
             stdin: None,
             stdout: None,
+            server_ready_timeout_secs: self.server_ready_timeout_secs,
+            max_threads: self.max_threads,
         }
     }
 }

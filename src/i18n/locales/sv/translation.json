@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Allmänt",
-    "models": "Modeller",
+    "models": "Transcription Models",
     "advanced": "Avancerat",
     "postProcessing": "Efterbearbetning",
     "history": "Historik",
     "debug": "Felsökning",
-    "about": "Om"
+    "about": "Om",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "För att komma igång, välj en transkriptionsmodell",

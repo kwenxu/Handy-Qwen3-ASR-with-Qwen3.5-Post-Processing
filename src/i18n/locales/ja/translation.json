@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "一般",
-    "models": "モデル",
+    "models": "Transcription Models",
     "advanced": "詳細設定",
     "postProcessing": "後処理",
     "history": "履歴",
     "debug": "デバッグ",
-    "about": "概要"
+    "about": "概要",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "開始するには、文字起こしモデルを選択してください",

@@ -1,6 +1,7 @@
 fn main() {
     // Ensure Cargo reruns build script when Qwen3 runtime resources change.
     println!("cargo:rerun-if-changed=resources/qwen3_asr_mlx");
+    println!("cargo:rerun-if-changed=resources/qwen35_post_mlx");
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     build_apple_intelligence_bridge();
@@ -115,6 +116,22 @@ fn escape_string(s: &str) -> String {
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn build_apple_intelligence_c_stub() {
+    use std::path::Path;
+
+    const STUB_C_FILE: &str = "swift/apple_intelligence_stub.c";
+    if !Path::new(STUB_C_FILE).exists() {
+        panic!("Source file {} is missing!", STUB_C_FILE);
+    }
+
+    println!("cargo:warning=Building Apple Intelligence bridge with C stubs.");
+    cc::Build::new()
+        .file(STUB_C_FILE)
+        .flag_if_supported("-std=c11")
+        .compile("apple_intelligence");
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn build_apple_intelligence_bridge() {
     use std::env;
     use std::path::{Path, PathBuf};
@@ -122,10 +139,12 @@ fn build_apple_intelligence_bridge() {
 
     const REAL_SWIFT_FILE: &str = "swift/apple_intelligence.swift";
     const STUB_SWIFT_FILE: &str = "swift/apple_intelligence_stub.swift";
+    const STUB_C_FILE: &str = "swift/apple_intelligence_stub.c";
     const BRIDGE_HEADER: &str = "swift/apple_intelligence_bridge.h";
 
     println!("cargo:rerun-if-changed={REAL_SWIFT_FILE}");
     println!("cargo:rerun-if-changed={STUB_SWIFT_FILE}");
+    println!("cargo:rerun-if-changed={STUB_C_FILE}");
     println!("cargo:rerun-if-changed={BRIDGE_HEADER}");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
@@ -148,13 +167,14 @@ fn build_apple_intelligence_bridge() {
         Path::new(&sdk_path).join("System/Library/Frameworks/FoundationModels.framework");
     let has_foundation_models = framework_path.exists();
 
-    let source_file = if has_foundation_models {
-        println!("cargo:warning=Building with Apple Intelligence support.");
-        REAL_SWIFT_FILE
-    } else {
-        println!("cargo:warning=Apple Intelligence SDK not found. Building with stubs.");
-        STUB_SWIFT_FILE
-    };
+    if !has_foundation_models {
+        println!("cargo:warning=Apple Intelligence SDK not found. Building with C stubs.");
+        build_apple_intelligence_c_stub();
+        return;
+    }
+
+    println!("cargo:warning=Building with Apple Intelligence support.");
+    let source_file = REAL_SWIFT_FILE;
 
     if !Path::new(source_file).exists() {
         panic!("Source file {} is missing!", source_file);
@@ -202,7 +222,11 @@ fn build_apple_intelligence_bridge() {
         .expect("Failed to invoke swiftc for Apple Intelligence bridge");
 
     if !status.success() {
-        panic!("swiftc failed to compile {source_file}");
+        println!(
+            "cargo:warning=swiftc failed to compile Apple Intelligence bridge. Falling back to C stubs."
+        );
+        build_apple_intelligence_c_stub();
+        return;
     }
 
     let status = Command::new("libtool")

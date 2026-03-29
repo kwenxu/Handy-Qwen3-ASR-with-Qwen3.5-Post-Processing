@@ -50,6 +50,13 @@ function App() {
     checkOnboardingStatus();
   }, []);
 
+  useEffect(() => {
+    const activeConfig = SECTIONS_CONFIG[currentSection];
+    if (activeConfig && !activeConfig.enabled(settings)) {
+      setCurrentSection("general");
+    }
+  }, [currentSection, settings]);
+
   // Initialize RTL direction when language changes
   useEffect(() => {
     initializeRTL(i18n.language);

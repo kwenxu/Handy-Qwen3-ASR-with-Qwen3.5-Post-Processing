@@ -133,6 +133,44 @@ const settingUpdaters: {
     commands.changePostProcessEnabledSetting(value as boolean),
   post_process_selected_prompt_id: (value) =>
     commands.setPostProcessSelectedPrompt(value as string),
+  post_process_system_prompt: (value) =>
+    commands.changePostProcessSystemPromptSetting(value as string),
+  post_process_quality: (value) =>
+    commands.changePostProcessQualitySetting(value as string),
+  post_process_local_max_tokens: (value) =>
+    commands.changePostProcessLocalMaxTokensSetting(value as number),
+  post_process_local_temperature: (value) =>
+    commands.changePostProcessLocalTemperatureSetting(value as number),
+  post_process_local_top_p: (value) =>
+    commands.changePostProcessLocalTopPSetting(value as number),
+  post_process_local_repetition_penalty: (value) =>
+    commands.changePostProcessLocalRepetitionPenaltySetting(value as number),
+  post_process_local_repetition_context_size: (value) =>
+    commands.changePostProcessLocalRepetitionContextSizeSetting(
+      value as number,
+    ),
+  qwen_startup_preload_strategy: (value) =>
+    commands.changeQwenStartupPreloadStrategySetting(value as string),
+  qwen3_startup_preload_enabled: (value) =>
+    commands.changeQwen3StartupPreloadEnabledSetting(value as boolean),
+  qwen3_startup_preload_delay_ms: (value) =>
+    commands.changeQwen3StartupPreloadDelayMsSetting(value as number),
+  qwen3_max_threads: (value) =>
+    commands.changeQwen3MaxThreadsSetting(value as number),
+  qwen3_server_ready_timeout_sec: (value) =>
+    commands.changeQwen3ServerReadyTimeoutSecSetting(value as number),
+  qwen35_startup_preload_enabled: (value) =>
+    commands.changeQwen35StartupPreloadEnabledSetting(value as boolean),
+  qwen35_startup_preload_delay_ms: (value) =>
+    commands.changeQwen35StartupPreloadDelayMsSetting(value as number),
+  qwen35_warmup_enabled: (value) =>
+    commands.changeQwen35WarmupEnabledSetting(value as boolean),
+  qwen35_max_threads: (value) =>
+    commands.changeQwen35MaxThreadsSetting(value as number),
+  qwen35_server_ready_timeout_sec: (value) =>
+    commands.changeQwen35ServerReadyTimeoutSecSetting(value as number),
+  qwen35_inference_timeout_sec: (value) =>
+    commands.changeQwen35InferenceTimeoutSecSetting(value as number),
   mute_while_recording: (value) =>
     commands.changeMuteWhileRecordingSetting(value as boolean),
   append_trailing_space: (value) =>

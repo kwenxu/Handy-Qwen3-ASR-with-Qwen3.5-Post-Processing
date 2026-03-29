@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Geral",
-    "models": "Modelos",
+    "models": "Transcription Models",
     "advanced": "Avançado",
     "postProcessing": "Pós-Processamento",
     "history": "Histórico",
     "debug": "Depuração",
-    "about": "Sobre"
+    "about": "Sobre",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Para começar, escolha um modelo de transcrição",

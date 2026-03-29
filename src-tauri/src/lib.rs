@@ -29,6 +29,8 @@ use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::{EngineType, ModelManager};
+use managers::post_process_model::PostProcessModelManager;
+use managers::qwen35_post_manager::Qwen35PostManager;
 use managers::transcription::TranscriptionManager;
 #[cfg(unix)]
 use signal_hook::consts::{SIGUSR1, SIGUSR2};
@@ -155,6 +157,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     );
     let history_manager =
         Arc::new(HistoryManager::new(app_handle).expect("Failed to initialize history manager"));
+    let post_process_model_manager = Arc::new(
+        PostProcessModelManager::new(app_handle)
+            .expect("Failed to initialize post-process model manager"),
+    );
+    let qwen35_post_manager = Arc::new(
+        Qwen35PostManager::new(app_handle, post_process_model_manager.clone())
+            .expect("Failed to initialize Qwen3.5 post-process manager"),
+    );
 
     // Apply accelerator preferences before any model loads
     managers::transcription::apply_accelerator_settings(app_handle);
@@ -164,6 +174,8 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
+    app_handle.manage(post_process_model_manager.clone());
+    app_handle.manage(qwen35_post_manager.clone());
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -293,23 +305,100 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     utils::create_recording_overlay(app_handle);
 }
 
-pub(crate) fn schedule_qwen3_startup_preload(app_handle: AppHandle) {
-    std::thread::spawn(move || {
-        let model_manager = app_handle.state::<Arc<ModelManager>>();
-        let transcription_manager = app_handle.state::<Arc<TranscriptionManager>>();
-        let settings = settings::get_settings(&app_handle);
-        let selected = settings.selected_model;
+fn run_qwen3_startup_preload(app_handle: &AppHandle) {
+    let settings = settings::get_settings(app_handle);
+    if !settings.qwen3_startup_preload_enabled {
+        return;
+    }
 
-        if let Some(info) = model_manager.get_model_info(&selected) {
-            if info.is_downloaded && matches!(info.engine_type, EngineType::Qwen3) {
-                log::info!(
-                    "Deferred startup preload for selected Qwen3 model: {}",
-                    selected
-                );
-                transcription_manager.initiate_model_load();
-            }
+    if settings.qwen3_startup_preload_delay_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(
+            settings.qwen3_startup_preload_delay_ms,
+        ));
+    }
+
+    let model_manager = app_handle.state::<Arc<ModelManager>>();
+    let transcription_manager = app_handle.state::<Arc<TranscriptionManager>>();
+    let selected = settings.selected_model;
+
+    if let Some(info) = model_manager.get_model_info(&selected) {
+        if info.is_downloaded && matches!(info.engine_type, EngineType::Qwen3) {
+            log::info!(
+                "Deferred startup preload for selected Qwen3 model: {}",
+                selected
+            );
+            transcription_manager.initiate_model_load();
         }
-    });
+    }
+}
+
+fn run_qwen35_startup_preload(app_handle: &AppHandle) {
+    let settings = settings::get_settings(app_handle);
+    if !settings.qwen35_startup_preload_enabled {
+        return;
+    }
+
+    if settings.qwen35_startup_preload_delay_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(
+            settings.qwen35_startup_preload_delay_ms,
+        ));
+    }
+
+    if !settings.post_process_enabled
+        || settings.post_process_provider_id != settings::LOCAL_QWEN35_PROVIDER_ID
+    {
+        return;
+    }
+
+    let selected = settings
+        .post_process_models
+        .get(settings::LOCAL_QWEN35_PROVIDER_ID)
+        .cloned()
+        .unwrap_or_default();
+
+    if selected.trim().is_empty() {
+        return;
+    }
+
+    let post_process_model_manager = app_handle.state::<Arc<PostProcessModelManager>>();
+    if !post_process_model_manager.check_model_cached(&selected) {
+        return;
+    }
+
+    let qwen35_manager = app_handle.state::<Arc<Qwen35PostManager>>();
+    log::info!(
+        "Deferred startup preload for selected local Qwen3.5 post-process model: {}",
+        selected
+    );
+    if let Err(err) = qwen35_manager.preload_model(&selected) {
+        log::warn!(
+            "Failed to preload local Qwen3.5 post-process model {}: {}",
+            selected,
+            err
+        );
+    }
+}
+
+pub(crate) fn schedule_qwen3_startup_preload(app_handle: AppHandle) {
+    std::thread::spawn(move || run_qwen3_startup_preload(&app_handle));
+}
+
+pub(crate) fn schedule_qwen35_startup_preload(app_handle: AppHandle) {
+    std::thread::spawn(move || run_qwen35_startup_preload(&app_handle));
+}
+
+pub(crate) fn schedule_qwen_startup_preload(app_handle: AppHandle) {
+    let settings = settings::get_settings(&app_handle);
+    if settings.qwen_startup_preload_strategy == "serial" {
+        std::thread::spawn(move || {
+            run_qwen3_startup_preload(&app_handle);
+            run_qwen35_startup_preload(&app_handle);
+        });
+        return;
+    }
+
+    schedule_qwen3_startup_preload(app_handle.clone());
+    schedule_qwen35_startup_preload(app_handle);
 }
 
 #[tauri::command]
@@ -365,6 +454,24 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_auto_submit_setting,
             shortcut::change_auto_submit_key_setting,
             shortcut::change_post_process_enabled_setting,
+            shortcut::change_post_process_system_prompt_setting,
+            shortcut::change_post_process_quality_setting,
+            shortcut::change_post_process_local_max_tokens_setting,
+            shortcut::change_post_process_local_temperature_setting,
+            shortcut::change_post_process_local_top_p_setting,
+            shortcut::change_post_process_local_repetition_penalty_setting,
+            shortcut::change_post_process_local_repetition_context_size_setting,
+            shortcut::change_qwen_startup_preload_strategy_setting,
+            shortcut::change_qwen3_startup_preload_enabled_setting,
+            shortcut::change_qwen3_startup_preload_delay_ms_setting,
+            shortcut::change_qwen3_max_threads_setting,
+            shortcut::change_qwen3_server_ready_timeout_sec_setting,
+            shortcut::change_qwen35_startup_preload_enabled_setting,
+            shortcut::change_qwen35_startup_preload_delay_ms_setting,
+            shortcut::change_qwen35_warmup_enabled_setting,
+            shortcut::change_qwen35_max_threads_setting,
+            shortcut::change_qwen35_server_ready_timeout_sec_setting,
+            shortcut::change_qwen35_inference_timeout_sec_setting,
             shortcut::change_experimental_enabled_setting,
             shortcut::change_post_process_base_url_setting,
             shortcut::change_post_process_api_key_setting,
@@ -418,6 +525,10 @@ pub fn run(cli_args: CliArgs) {
             commands::models::is_model_loading,
             commands::models::has_any_models_available,
             commands::models::has_any_models_or_downloads,
+            commands::post_process_models::get_local_post_process_models,
+            commands::post_process_models::download_local_post_process_model,
+            commands::post_process_models::delete_local_post_process_model,
+            commands::post_process_models::cancel_local_post_process_model_download,
             commands::audio::update_microphone_mode,
             commands::audio::get_microphone_mode,
             commands::audio::get_windows_microphone_permission_status,
@@ -619,7 +730,7 @@ pub fn run(cli_args: CliArgs) {
             }
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             if let tauri::RunEvent::Ready = &event {
-                schedule_qwen3_startup_preload(app.clone());
+                schedule_qwen_startup_preload(app.clone());
             }
             let _ = (app, event); // suppress unused warnings on non-macOS
         });

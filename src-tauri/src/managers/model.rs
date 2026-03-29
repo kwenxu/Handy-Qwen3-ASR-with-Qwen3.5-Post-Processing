@@ -1,5 +1,5 @@
 use crate::managers::qwen3_engine::{
-    build_qwen3_file_url, init_qwen3_python_path, resolve_qwen3_model_info,
+    build_qwen3_file_url, init_qwen3_python_path, resolve_qwen3_model_info_for_endpoint,
     QWEN3_DEFAULT_ENDPOINT,
 };
 use crate::settings::{get_settings, write_settings};
@@ -68,6 +68,110 @@ struct FileDownloadResult {
     downloaded: u64,
     total: u64,
     cancelled: bool,
+}
+
+const DEFAULT_PYPI_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
+const FALLBACK_PYPI_INDEX_URL: &str = "https://pypi.org/simple";
+const QWEN3_FALLBACK_ENDPOINT: &str = "https://huggingface.co";
+
+fn env_or_default(key: &str, default: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn uv_index_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |value: Option<String>| {
+        if let Some(value) = value {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                return;
+            }
+            if !candidates.iter().any(|item| item == &trimmed) {
+                candidates.push(trimmed);
+            }
+        }
+    };
+
+    push_unique(std::env::var("PIP_INDEX_URL").ok());
+    push_unique(std::env::var("UV_INDEX_URL").ok());
+    push_unique(std::env::var("UV_DEFAULT_INDEX").ok());
+    push_unique(Some(DEFAULT_PYPI_INDEX_URL.to_string()));
+    push_unique(Some(FALLBACK_PYPI_INDEX_URL.to_string()));
+    candidates
+}
+
+fn apply_uv_runtime_env_with_index(cmd: &mut std::process::Command, index_url: &str) {
+    cmd.env(
+        "HF_ENDPOINT",
+        env_or_default("HF_ENDPOINT", QWEN3_DEFAULT_ENDPOINT),
+    );
+    cmd.env("PIP_INDEX_URL", index_url);
+    cmd.env("UV_INDEX_URL", index_url);
+    cmd.env("UV_DEFAULT_INDEX", index_url);
+    cmd.env("PIP_DISABLE_PIP_VERSION_CHECK", "1");
+}
+
+fn apply_uv_runtime_env(cmd: &mut std::process::Command) {
+    let index = uv_index_candidates()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| DEFAULT_PYPI_INDEX_URL.to_string());
+    apply_uv_runtime_env_with_index(cmd, &index);
+}
+
+fn detect_compatible_system_python() -> Option<String> {
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}|{sys.executable}\")")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.trim();
+    let mut parts = line.split('|');
+    let version = parts.next()?.trim();
+    let executable = parts.next()?.trim();
+    if executable.is_empty() {
+        return None;
+    }
+
+    let mut version_parts = version.split('.');
+    let major = version_parts.next()?.parse::<u32>().ok()?;
+    let minor = version_parts.next()?.parse::<u32>().ok()?;
+    if major > 3 || (major == 3 && minor >= 11) {
+        Some(executable.to_string())
+    } else {
+        None
+    }
+}
+
+fn resolve_python_spec_for_uv() -> String {
+    if let Some(python_path) = std::env::var("HANDY_QWEN_PYTHON")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        info!("Using HANDY_QWEN_PYTHON: {}", python_path);
+        return python_path;
+    }
+
+    if let Some(system_python) = detect_compatible_system_python() {
+        info!(
+            "Using compatible system Python for Qwen3 runtime: {}",
+            system_python
+        );
+        return system_python;
+    }
+
+    info!("No compatible system Python detected, falling back to uv-managed Python 3.11.");
+    "3.11".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,8 +487,8 @@ impl ModelManager {
                 ModelInfo {
                     id: "qwen3-asr".to_string(),
                     name: "Qwen3-ASR-0.6B-8bit (MLX)".to_string(),
-                    description:
-                        "MLX backend, 0.6B model, 8-bit quantized. Multilingual ASR.".to_string(),
+                    description: "MLX backend, 0.6B model, 8-bit quantized. Multilingual ASR."
+                        .to_string(),
                     filename: "qwen3-asr".to_string(),
                     url: Some("mlx://mlx-community/Qwen3-ASR-0.6B-8bit".to_string()),
                     sha256: None,
@@ -1250,7 +1354,47 @@ impl ModelManager {
             disarmed: false,
         };
 
-        let model_plan = resolve_qwen3_model_info(&mlx_model_name)?;
+        let probe_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build Qwen3 endpoint probe client: {}", e))?;
+
+        let endpoint_candidates = Self::qwen3_candidate_endpoints(None);
+        let ranked_endpoints =
+            Self::rank_qwen3_endpoints(&probe_client, &mlx_model_name, endpoint_candidates).await;
+
+        let mut model_plan = None;
+        let mut resolved_endpoint = String::new();
+        let mut resolve_errors = Vec::new();
+        for endpoint in &ranked_endpoints {
+            match resolve_qwen3_model_info_for_endpoint(&mlx_model_name, endpoint) {
+                Ok(plan) => {
+                    info!(
+                        "Resolved Qwen3 model plan for {} using endpoint {}",
+                        mlx_model_name, endpoint
+                    );
+                    resolved_endpoint = endpoint.clone();
+                    model_plan = Some(plan);
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to resolve Qwen3 model plan for {} via endpoint {}: {}",
+                        mlx_model_name, endpoint, err
+                    );
+                    resolve_errors.push(format!("{} => {}", endpoint, err));
+                }
+            }
+        }
+        let model_plan = model_plan.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unable to resolve Qwen3 model plan for {} from all endpoints: {}",
+                mlx_model_name,
+                resolve_errors.join(" | ")
+            )
+        })?;
+
+        let download_endpoints = Self::qwen3_candidate_endpoints(Some(&resolved_endpoint));
         let client = reqwest::Client::new();
 
         let mut total_bytes = if model_plan.total > 0 {
@@ -1307,18 +1451,29 @@ impl ModelManager {
                 continue;
             }
 
-            let url =
-                build_qwen3_file_url(QWEN3_DEFAULT_ENDPOINT, &mlx_model_name, &revision, &file.filename)?
-                    .to_string();
+            let mut on_progress = |file_downloaded: u64, file_total: u64| {
+                let effective_total = if total_bytes == 0 {
+                    file_total
+                } else {
+                    total_bytes
+                };
+                let aggregate_downloaded =
+                    downloaded_bytes.saturating_sub(previous_counted) + file_downloaded;
+                let aggregate_total = effective_total.max(aggregate_downloaded);
+                emit_progress(aggregate_downloaded.min(aggregate_total), aggregate_total);
+            };
 
             let result = self
-                .download_file_with_resume(&client, &url, &path, &cancel_flag, |file_downloaded, file_total| {
-                    let effective_total = if total_bytes == 0 { file_total } else { total_bytes };
-                    let aggregate_downloaded =
-                        downloaded_bytes.saturating_sub(previous_counted) + file_downloaded;
-                    let aggregate_total = effective_total.max(aggregate_downloaded);
-                    emit_progress(aggregate_downloaded.min(aggregate_total), aggregate_total);
-                })
+                .download_qwen3_file_from_endpoints(
+                    &client,
+                    &download_endpoints,
+                    &mlx_model_name,
+                    &revision,
+                    &file.filename,
+                    &path,
+                    &cancel_flag,
+                    &mut on_progress,
+                )
                 .await?;
 
             if result.cancelled {
@@ -1338,12 +1493,17 @@ impl ModelManager {
                 }
             }
 
-            let discovered_total = if file.size > 0 { file.size } else { result.total };
+            let discovered_total = if file.size > 0 {
+                file.size
+            } else {
+                result.total
+            };
             if discovered_total > previous_expected {
                 total_bytes += discovered_total - previous_expected;
             }
 
-            downloaded_bytes = downloaded_bytes.saturating_sub(previous_counted) + result.downloaded;
+            downloaded_bytes =
+                downloaded_bytes.saturating_sub(previous_counted) + result.downloaded;
             if total_bytes < downloaded_bytes {
                 total_bytes = downloaded_bytes;
             }
@@ -1368,7 +1528,10 @@ impl ModelManager {
         Ok(())
     }
 
-    pub fn ensure_qwen3_python_runtime_ready(&self, _progress_model_id: Option<&str>) -> Result<()> {
+    pub fn ensure_qwen3_python_runtime_ready(
+        &self,
+        _progress_model_id: Option<&str>,
+    ) -> Result<()> {
         init_qwen3_python_path(&self.app_handle)
             .map_err(|e| anyhow::anyhow!("Failed to initialize Qwen3 python path: {}", e))?;
 
@@ -1381,8 +1544,13 @@ impl ModelManager {
         let bundled_runtime_dir = self
             .app_handle
             .path()
-            .resolve("resources/qwen3_asr_mlx", tauri::path::BaseDirectory::Resource)
-            .map_err(|e| anyhow::anyhow!("Failed to resolve bundled Qwen3 runtime directory: {}", e))?;
+            .resolve(
+                "resources/qwen3_asr_mlx",
+                tauri::path::BaseDirectory::Resource,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to resolve bundled Qwen3 runtime directory: {}", e)
+            })?;
 
         if !bundled_runtime_dir.exists() {
             return Err(anyhow::anyhow!(
@@ -1429,23 +1597,31 @@ impl ModelManager {
             fs::set_permissions(&uv_bin, perms)?;
         }
 
+        let python_spec = resolve_python_spec_for_uv();
+
         if !venv_python.exists() {
             info!(
-                "Creating Qwen3 Python runtime at {} using {}",
+                "Creating Qwen3 Python runtime at {} using {} (python={})",
                 venv_dir.display(),
-                uv_bin.display()
+                uv_bin.display(),
+                python_spec
             );
 
-            let venv_status = std::process::Command::new(&uv_bin)
+            let mut venv_cmd = std::process::Command::new(&uv_bin);
+            apply_uv_runtime_env(&mut venv_cmd);
+            let venv_status = venv_cmd
                 .arg("venv")
                 .arg("--clear")
                 .arg("--python")
-                .arg("3.11")
+                .arg(&python_spec)
                 .arg(&venv_dir)
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to execute uv venv: {}", e))?;
             if !venv_status.success() {
-                return Err(anyhow::anyhow!("uv venv failed with status: {}", venv_status));
+                return Err(anyhow::anyhow!(
+                    "uv venv failed with status: {}",
+                    venv_status
+                ));
             }
         } else {
             info!(
@@ -1454,17 +1630,55 @@ impl ModelManager {
             );
         }
 
-        let sync_status = std::process::Command::new(&uv_bin)
-            .arg("sync")
-            .arg("--project")
-            .arg(&python_runtime_dir)
-            .arg("--python")
-            .arg(&venv_python)
-            .arg("--frozen")
-            .status()
-            .map_err(|e| anyhow::anyhow!("Failed to execute uv sync: {}", e))?;
-        if !sync_status.success() {
-            return Err(anyhow::anyhow!("uv sync failed with status: {}", sync_status));
+        let index_candidates = uv_index_candidates();
+        let mut sync_ok = false;
+        let mut sync_errors = Vec::new();
+        for index_url in &index_candidates {
+            info!("Running uv sync for Qwen3 runtime using index {}", index_url);
+            let mut sync_cmd = std::process::Command::new(&uv_bin);
+            apply_uv_runtime_env_with_index(&mut sync_cmd, index_url);
+            let sync_status = sync_cmd
+                .arg("sync")
+                .arg("--project")
+                .arg(&python_runtime_dir)
+                .arg("--python")
+                .arg(&venv_python)
+                .arg("--frozen")
+                .status()
+                .map_err(|e| anyhow::anyhow!("Failed to execute uv sync: {}", e))?;
+            if sync_status.success() {
+                sync_ok = true;
+                break;
+            }
+
+            warn!(
+                "uv sync --frozen failed with status {} on index {}. Retrying without --frozen.",
+                sync_status, index_url
+            );
+            let mut fallback_sync_cmd = std::process::Command::new(&uv_bin);
+            apply_uv_runtime_env_with_index(&mut fallback_sync_cmd, index_url);
+            let fallback_sync_status = fallback_sync_cmd
+                .arg("sync")
+                .arg("--project")
+                .arg(&python_runtime_dir)
+                .arg("--python")
+                .arg(&venv_python)
+                .status()
+                .map_err(|e| anyhow::anyhow!("Failed to execute uv sync retry: {}", e))?;
+            if fallback_sync_status.success() {
+                sync_ok = true;
+                break;
+            }
+            sync_errors.push(format!(
+                "{} (frozen: {}, retry: {})",
+                index_url, sync_status, fallback_sync_status
+            ));
+        }
+        if !sync_ok {
+            return Err(anyhow::anyhow!(
+                "uv sync failed across all index candidates: {}",
+                sync_errors.join(" | ")
+            ));
         }
 
         Ok(())
@@ -1507,6 +1721,118 @@ impl ModelManager {
         }
 
         Ok(())
+    }
+
+    fn normalize_endpoint(raw: &str) -> Option<String> {
+        let trimmed = raw.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    fn qwen3_candidate_endpoints(preferred: Option<&str>) -> Vec<String> {
+        let mut endpoints = Vec::new();
+        let mut push_unique = |endpoint: Option<String>| {
+            if let Some(endpoint) = endpoint {
+                if !endpoints.iter().any(|item| item == &endpoint) {
+                    endpoints.push(endpoint);
+                }
+            }
+        };
+
+        push_unique(preferred.and_then(Self::normalize_endpoint));
+        push_unique(
+            std::env::var("HF_ENDPOINT")
+                .ok()
+                .and_then(|v| Self::normalize_endpoint(&v)),
+        );
+        push_unique(Self::normalize_endpoint(QWEN3_DEFAULT_ENDPOINT));
+        push_unique(Self::normalize_endpoint(QWEN3_FALLBACK_ENDPOINT));
+
+        endpoints
+    }
+
+    async fn rank_qwen3_endpoints(
+        client: &reqwest::Client,
+        repo_id: &str,
+        endpoints: Vec<String>,
+    ) -> Vec<String> {
+        let mut scored: Vec<(String, Duration)> = Vec::new();
+        let mut unscored: Vec<String> = Vec::new();
+
+        for endpoint in endpoints {
+            let probe_url = format!("{}/api/models/{}", endpoint, repo_id);
+            let start = Instant::now();
+            match client.get(&probe_url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    scored.push((endpoint, start.elapsed()));
+                }
+                Ok(response) => {
+                    warn!(
+                        "Qwen3 endpoint probe returned non-success status {} for {}",
+                        response.status(),
+                        probe_url
+                    );
+                    unscored.push(endpoint);
+                }
+                Err(err) => {
+                    warn!("Qwen3 endpoint probe failed for {}: {}", probe_url, err);
+                    unscored.push(endpoint);
+                }
+            }
+        }
+
+        scored.sort_by_key(|(_, latency)| *latency);
+        let mut ranked: Vec<String> = scored
+            .into_iter()
+            .map(|(endpoint, _)| endpoint)
+            .collect();
+        ranked.extend(unscored);
+        ranked
+    }
+
+    async fn download_qwen3_file_from_endpoints<F>(
+        &self,
+        client: &reqwest::Client,
+        endpoints: &[String],
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+        target_path: &Path,
+        cancel_flag: &Arc<AtomicBool>,
+        on_progress: &mut F,
+    ) -> Result<FileDownloadResult>
+    where
+        F: FnMut(u64, u64),
+    {
+        let mut errors = Vec::new();
+
+        for endpoint in endpoints {
+            let url = build_qwen3_file_url(endpoint, repo_id, revision, filename)?.to_string();
+            match self
+                .download_file_with_resume(client, &url, target_path, cancel_flag, |d, t| {
+                    on_progress(d, t)
+                })
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    warn!(
+                        "Qwen3 file download failed from endpoint {} (file {}): {}",
+                        endpoint, filename, err
+                    );
+                    errors.push(format!("{} => {}", endpoint, err));
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to download {} from all Qwen3 endpoints: {}",
+            filename,
+            errors.join(" | ")
+        ))
     }
 
     async fn download_file_with_resume<F>(
@@ -1675,22 +2001,28 @@ impl ModelManager {
 
         let client = reqwest::Client::new();
         let download_result = self
-            .download_file_with_resume(&client, &url, &partial_path, &cancel_flag, |downloaded, total_size| {
-                let percentage = if total_size > 0 {
-                    (downloaded as f64 / total_size as f64) * 100.0
-                } else {
-                    0.0
-                };
-                let _ = self.app_handle.emit(
-                    "model-download-progress",
-                    DownloadProgress {
-                        model_id: model_id.to_string(),
-                        downloaded,
-                        total: total_size,
-                        percentage,
-                    },
-                );
-            })
+            .download_file_with_resume(
+                &client,
+                &url,
+                &partial_path,
+                &cancel_flag,
+                |downloaded, total_size| {
+                    let percentage = if total_size > 0 {
+                        (downloaded as f64 / total_size as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    let _ = self.app_handle.emit(
+                        "model-download-progress",
+                        DownloadProgress {
+                            model_id: model_id.to_string(),
+                            downloaded,
+                            total: total_size,
+                            percentage,
+                        },
+                    );
+                },
+            )
             .await?;
 
         if download_result.cancelled {

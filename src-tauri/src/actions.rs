@@ -4,8 +4,11 @@ use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, S
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
+use crate::managers::qwen35_post_manager::Qwen35PostManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::settings::{
+    get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID, LOCAL_QWEN35_PROVIDER_ID,
+};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
@@ -15,7 +18,7 @@ use crate::TranscriptionCoordinator;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::Manager;
@@ -57,13 +60,130 @@ fn strip_invisible_chars(s: &str) -> String {
     s.replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'], "")
 }
 
-/// Build a system prompt from the user's prompt template.
-/// Removes `${output}` placeholder since the transcription is sent as the user message.
-fn build_system_prompt(prompt_template: &str) -> String {
-    prompt_template.replace("${output}", "").trim().to_string()
+fn normalize_for_compare(s: &str) -> String {
+    s.chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
 }
 
-async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
+fn collapse_repeated_lines(s: &str) -> String {
+    let mut result: Vec<String> = Vec::new();
+    let mut previous_key = String::new();
+
+    for line in s.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = normalize_for_compare(trimmed);
+        if key.is_empty() {
+            continue;
+        }
+        if key == previous_key {
+            continue;
+        }
+        result.push(trimmed.to_string());
+        previous_key = key;
+    }
+
+    // If the model got stuck and repeated near-identical lines, keep only the
+    // first occurrence of each normalized line.
+    if result.len() >= 6 {
+        let mut seen = HashSet::new();
+        let mut deduped = Vec::new();
+        for line in &result {
+            let key = normalize_for_compare(line);
+            if seen.insert(key) {
+                deduped.push(line.clone());
+            }
+        }
+        if deduped.len() * 2 <= result.len() {
+            return deduped.join("\n");
+        }
+    }
+
+    result.join("\n")
+}
+
+fn clean_post_process_output(s: &str) -> String {
+    let mut out = strip_invisible_chars(s);
+    out = out.replace("<think>", "").replace("</think>", "");
+    out = collapse_repeated_lines(&out);
+    out.trim().to_string()
+}
+
+fn build_user_prompt_content(prompt_template: &str, transcription: &str) -> String {
+    if prompt_template.contains("${output}") {
+        prompt_template.replace("${output}", transcription)
+    } else {
+        format!(
+            "{}\n\nTranscript:\n{}",
+            prompt_template.trim(),
+            transcription
+        )
+    }
+}
+
+fn has_meaningful_text(input: &str) -> bool {
+    let stripped = strip_invisible_chars(input);
+    let compact = stripped.trim();
+    if compact.is_empty() {
+        return false;
+    }
+    let informative_chars = compact
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ('\u{4E00}'..='\u{9FFF}').contains(ch))
+        .count();
+    informative_chars >= 1
+}
+
+fn reject_post_output_reason(output: &str) -> Option<&'static str> {
+    if output.trim().is_empty() {
+        return Some("empty");
+    }
+    None
+}
+
+fn should_reject_post_output(output: &str) -> bool {
+    reject_post_output_reason(output).is_some()
+}
+
+#[derive(Clone, Copy)]
+struct LocalGenerationParams {
+    max_tokens: usize,
+    temperature: f32,
+    top_p: f32,
+    repetition_penalty: f32,
+    repetition_context_size: usize,
+}
+
+fn local_generation_params_from_settings(settings: &AppSettings) -> LocalGenerationParams {
+    LocalGenerationParams {
+        max_tokens: settings.post_process_local_max_tokens.clamp(64, 512),
+        temperature: settings.post_process_local_temperature.clamp(0.0, 1.0) as f32,
+        top_p: settings.post_process_local_top_p.clamp(0.1, 1.0) as f32,
+        repetition_penalty: settings
+            .post_process_local_repetition_penalty
+            .clamp(1.0, 1.5) as f32,
+        repetition_context_size: settings
+            .post_process_local_repetition_context_size
+            .clamp(32, 256),
+    }
+}
+
+async fn post_process_transcription(
+    app: &AppHandle,
+    settings: &AppSettings,
+    transcription: &str,
+) -> Option<String> {
+    if !has_meaningful_text(transcription) {
+        debug!("Post-processing skipped because transcription appears empty or non-informative");
+        return None;
+    }
+
+    let transcription_text = strip_invisible_chars(transcription).trim().to_string();
+
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
         None => {
@@ -114,6 +234,88 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         return None;
     }
 
+    let system_prompt = settings.post_process_system_prompt.trim().to_string();
+    let quality_params = local_generation_params_from_settings(settings);
+
+    if provider.id == LOCAL_QWEN35_PROVIDER_ID {
+        let manager = app.state::<Arc<Qwen35PostManager>>().inner().clone();
+        let local_model = model.clone();
+        let local_text = transcription_text.clone();
+        let local_user_content = build_user_prompt_content(&prompt, &local_text);
+        let local_user_content_for_infer = local_user_content.clone();
+        let local_template_id = selected_prompt_id.clone();
+        let local_quality = quality_params;
+        let local_system_prompt = system_prompt.clone();
+
+        return match tauri::async_runtime::spawn_blocking(move || {
+            debug!(
+                "Local Qwen3.5 params => max_tokens={}, temperature={}, top_p={}, repetition_penalty={}, repetition_context_size={}",
+                local_quality.max_tokens,
+                local_quality.temperature,
+                local_quality.top_p,
+                local_quality.repetition_penalty,
+                local_quality.repetition_context_size
+            );
+
+            let first = manager.process_text(
+                &local_model,
+                &local_user_content_for_infer,
+                &local_system_prompt,
+                Some(local_template_id.as_str()),
+                local_quality.max_tokens,
+                local_quality.temperature,
+                local_quality.top_p,
+                local_quality.repetition_penalty,
+                local_quality.repetition_context_size,
+            )?;
+
+            let first_clean = clean_post_process_output(&first);
+
+            if !should_reject_post_output(&first_clean) {
+                return Ok(first_clean);
+            }
+            if let Some(reason) = reject_post_output_reason(&first_clean) {
+                warn!(
+                    "Local Qwen3.5 first pass rejected (reason={}, template_id={})",
+                    reason, local_template_id
+                );
+            }
+
+            Err(anyhow::anyhow!(
+                "Local post-processing output rejected by validators"
+            ))
+        })
+        .await
+        {
+            Ok(Ok(result)) => {
+                if result.trim().is_empty() {
+                    debug!("Local Qwen3.5 post-processing returned empty output");
+                    None
+                } else {
+                    debug!(
+                        "Local Qwen3.5 post-processing succeeded. Output length: {} chars",
+                        result.len()
+                    );
+                    Some(result)
+                }
+            }
+            Ok(Err(err)) => {
+                error!(
+                    "Local Qwen3.5 post-processing failed: {}. Falling back to original transcription.",
+                    err
+                );
+                None
+            }
+            Err(err) => {
+                error!(
+                    "Local Qwen3.5 post-processing task panicked: {}. Falling back to original transcription.",
+                    err
+                );
+                None
+            }
+        };
+    }
+
     debug!(
         "Starting LLM post-processing with provider '{}' (model: {})",
         provider.id, model
@@ -128,8 +330,7 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     if provider.supports_structured_output {
         debug!("Using structured outputs for provider '{}'", provider.id);
 
-        let system_prompt = build_system_prompt(&prompt);
-        let user_content = transcription.to_string();
+        let user_content = build_user_prompt_content(&prompt, &transcription_text);
 
         // Handle Apple Intelligence separately since it uses native Swift APIs
         if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
@@ -153,7 +354,7 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
                             debug!("Apple Intelligence returned an empty response");
                             None
                         } else {
-                            let result = strip_invisible_chars(&result);
+                            let result = clean_post_process_output(&result);
                             debug!(
                                 "Apple Intelligence post-processing succeeded. Output length: {} chars",
                                 result.len()
@@ -192,8 +393,8 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
             &provider,
             api_key.clone(),
             &model,
-            user_content,
-            Some(system_prompt),
+            user_content.clone(),
+            Some(system_prompt.clone()),
             Some(json_schema),
         )
         .await
@@ -205,7 +406,11 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
                         if let Some(transcription_value) =
                             json.get(TRANSCRIPTION_FIELD).and_then(|t| t.as_str())
                         {
-                            let result = strip_invisible_chars(transcription_value);
+                            let result = clean_post_process_output(transcription_value);
+                            if should_reject_post_output(&result) {
+                                warn!("Structured post-processing output rejected by validators");
+                                return None;
+                            }
                             debug!(
                                 "Structured output post-processing succeeded for provider '{}'. Output length: {} chars",
                                 provider.id,
@@ -214,7 +419,12 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
                             return Some(result);
                         } else {
                             error!("Structured output response missing 'transcription' field");
-                            return Some(strip_invisible_chars(&content));
+                            let cleaned = clean_post_process_output(&content);
+                            if should_reject_post_output(&cleaned) {
+                                warn!("Structured raw content rejected by validators");
+                                return None;
+                            }
+                            return Some(cleaned);
                         }
                     }
                     Err(e) => {
@@ -222,7 +432,12 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
                             "Failed to parse structured output JSON: {}. Returning raw content.",
                             e
                         );
-                        return Some(strip_invisible_chars(&content));
+                        let cleaned = clean_post_process_output(&content);
+                        if should_reject_post_output(&cleaned) {
+                            warn!("Structured fallback content rejected by validators");
+                            return None;
+                        }
+                        return Some(cleaned);
                     }
                 }
             }
@@ -240,15 +455,24 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     }
 
-    // Legacy mode: Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
+    // Legacy mode: Build user content from prompt template.
+    let processed_prompt = build_user_prompt_content(&prompt, &transcription_text);
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
-    match crate::llm_client::send_chat_completion(&provider, api_key, &model, processed_prompt)
-        .await
+    match crate::llm_client::send_chat_completion(
+        &provider,
+        api_key,
+        &model,
+        processed_prompt.clone(),
+    )
+    .await
     {
         Ok(Some(content)) => {
-            let content = strip_invisible_chars(&content);
+            let content = clean_post_process_output(&content);
+            if should_reject_post_output(&content) {
+                warn!("Legacy post-processing output rejected by validators");
+                return None;
+            }
             debug!(
                 "LLM post-processing succeeded for provider '{}'. Output length: {} chars",
                 provider.id,
@@ -336,7 +560,8 @@ pub(crate) async fn process_transcription_output(
     }
 
     if post_process {
-        if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
+        if let Some(processed_text) = post_process_transcription(app, &settings, &final_text).await
+        {
             post_processed_text = Some(processed_text.clone());
             final_text = processed_text;
 

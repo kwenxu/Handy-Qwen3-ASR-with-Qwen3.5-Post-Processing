@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "כללי",
-    "models": "מודלים",
+    "models": "Transcription Models",
     "advanced": "מתקדם",
     "postProcessing": "עיבוד משלים",
     "history": "היסטוריה",
     "debug": "ניפוי שגיאות",
-    "about": "אודות"
+    "about": "אודות",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "כדי להתחיל, בחר מודל תמלול",

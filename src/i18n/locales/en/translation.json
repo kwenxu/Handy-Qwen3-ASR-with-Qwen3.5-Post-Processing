@@ -10,7 +10,8 @@
   },
   "sidebar": {
     "general": "General",
-    "models": "Models",
+    "models": "Transcription Models",
+    "performance": "Performance",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
     "history": "History",
@@ -354,16 +355,127 @@
         "duplicate": "\"{{word}}\" already exists"
       }
     },
+    "performance": {
+      "title": "Performance",
+      "groups": {
+        "transcription": "Transcription Model Performance",
+        "postProcessing": "Post-Processing Model Performance"
+      },
+      "qwenTranscription": {
+        "title": "Qwen Transcription Runtime (2 models)",
+        "description": "Runtime performance path for Qwen3-ASR-0.6B and 1.7B.",
+        "hint": "Prefers compatible system Python (>=3.11); falls back to bundled uv + .venv automatically."
+      },
+      "whisperExperimental": "Whisper Acceleration (Experimental)",
+      "qwenPanel": {
+        "title": "Qwen Performance Panel",
+        "strategy": {
+          "title": "Startup Preload Strategy",
+          "description": "Controls whether Qwen transcription and post-processing preloads run in parallel or serially on app startup.",
+          "options": {
+            "parallel": "Parallel (faster)",
+            "serial": "Serial (smoother)"
+          }
+        },
+        "qwen3Preload": {
+          "label": "Preload Qwen3 transcription on startup",
+          "description": "When enabled, Handy preloads the currently selected Qwen3 transcription model on launch to reduce first-run latency."
+        },
+        "qwen35Preload": {
+          "label": "Preload Qwen3.5 post-processing on startup",
+          "description": "When enabled, Handy preloads the selected local Qwen3.5 post-processing model at startup (local provider only)."
+        },
+        "qwen35Warmup": {
+          "label": "Run a short warmup inference after preload",
+          "description": "Performs a tiny warmup generation after loading the post-processing model to reduce first-request delay."
+        },
+        "startupTiming": {
+          "title": "Preload Timing",
+          "description": "Tune startup delay before preloading to avoid a CPU spike right after app launch.",
+          "qwen3Delay": {
+            "label": "Qwen3 preload delay (ms)",
+            "hint": "0 means immediate preload. Increase slightly to reduce startup stutter. Range: 0-15000."
+          },
+          "qwen35Delay": {
+            "label": "Qwen3.5 preload delay (ms)",
+            "hint": "0 means immediate preload. Increase to move post-processing load deeper into background startup. Range: 0-15000."
+          }
+        },
+        "runtime": {
+          "title": "Runtime Parallelism",
+          "description": "Caps Python/BLAS thread counts. 0 means auto; higher values can improve throughput but use more CPU.",
+          "qwen3Threads": {
+            "label": "Qwen3 max threads (0-16)",
+            "hint": "Thread cap for Qwen3 transcription runtime. 2-6 is usually enough on laptops."
+          },
+          "qwen35Threads": {
+            "label": "Qwen3.5 max threads (0-16)",
+            "hint": "Thread cap for local post-processing runtime. Lower values can be more stable for long prompts."
+          }
+        },
+        "timeouts": {
+          "title": "Timeout Protection",
+          "description": "Limits startup and inference wait time to avoid hard stalls.",
+          "qwen3Ready": {
+            "label": "Qwen3 startup ready timeout (sec)",
+            "hint": "Maximum wait for Qwen3 server READY. Range: 10-120."
+          },
+          "qwen35Startup": {
+            "label": "Qwen3.5 startup ready timeout (sec)",
+            "hint": "Maximum wait for local post-processing server READY. Range: 20-300."
+          },
+          "qwen35Inference": {
+            "label": "Qwen3.5 inference timeout (sec)",
+            "hint": "Maximum wait for one post-processing response. Range: 5-180."
+          }
+        }
+      }
+    },
     "postProcessing": {
       "title": "Post Process",
       "hotkey": {
         "title": "Hotkey"
       },
       "api": {
-        "title": "API (OpenAI Compatible)",
+        "title": "Model Selection",
         "provider": {
           "title": "Provider",
           "description": "Select an OpenAI-compatible provider."
+        },
+        "localModel": {
+          "title": "Local Post-Process Model",
+          "description": "Download and switch local post-processing models. Clicking 'Use' will also switch provider to local."
+        },
+        "systemPrompt": {
+          "title": "System Prompt",
+          "description": "Defines global behavior constraints for post-processing. Keep it strict: output only final text, no reasoning/explanations.",
+          "placeholder": "You are a strict transcription post-processor. Output final text only, no explanations, no <think> tags."
+        },
+        "localQuality": {
+          "title": "Local Quality Preset",
+          "description": "Control the tradeoff between speed and output quality for the local model.",
+          "balancedOnly": "This build uses a single stable 'Balanced' preset. Use the advanced controls below for fine tuning.",
+          "options": {
+            "fast": "Fast",
+            "balanced": "Balanced",
+            "quality": "Quality"
+          }
+        },
+        "advancedLocal": {
+          "title": "Advanced Local Params (Geek)",
+          "description": "Directly tune local post-processing generation parameters. Changes apply immediately after save.",
+          "singlePresetNotice": "Only one local preset is kept in this build. Tune the parameters below directly.",
+          "maxTokens": "max_tokens (64-512)",
+          "maxTokensHint": "Maximum output length per post-processing run. Too small may truncate output; too large is usually slower.",
+          "temperature": "temperature (0.00-1.00)",
+          "temperatureHint": "Controls randomness. Lower is more deterministic; higher is more diverse. For translation, 0.0~0.2 is usually best.",
+          "topP": "top_p (0.10-1.00)",
+          "topPHint": "Nucleus sampling range. Lower is more conservative; higher is more flexible. Tune with temperature together.",
+          "repetitionPenalty": "repetition_penalty (1.00-1.50)",
+          "repetitionPenaltyHint": "Reduces repetitive output. Higher values suppress repetition more, but can hurt fluency if too high.",
+          "repetitionContextSize": "repetition_context_size (32-256)",
+          "repetitionContextSizeHint": "Context window size used for repetition checks. Larger values check repetition over a wider span.",
+          "localOnlyHint": "Current provider is not local. These parameters take effect when you switch back to local provider."
         },
         "appleIntelligence": {
           "title": "Apple Intelligence",
@@ -393,9 +505,9 @@
         }
       },
       "prompts": {
-        "title": "Prompt",
+        "title": "Prompts",
         "selectedPrompt": {
-          "title": "Selected Prompt",
+          "title": "User Prompt & Templates",
           "description": "Select a template for refining transcriptions or create a new one. Use ${output} inside the prompt text to reference the captured transcript."
         },
         "noPrompts": "No prompts available",

@@ -8,6 +8,8 @@ use tauri_plugin_store::StoreExt;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+pub const LOCAL_QWEN35_PROVIDER_ID: &str = "local-qwen35";
+pub const LOCAL_QWEN35_DEFAULT_MODEL_ID: &str = "qwen35-optiq-2b";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -372,6 +374,42 @@ pub struct AppSettings {
     pub post_process_prompts: Vec<LLMPrompt>,
     #[serde(default)]
     pub post_process_selected_prompt_id: Option<String>,
+    #[serde(default = "default_post_process_system_prompt")]
+    pub post_process_system_prompt: String,
+    #[serde(default = "default_post_process_quality")]
+    pub post_process_quality: String,
+    #[serde(default = "default_post_process_local_max_tokens")]
+    pub post_process_local_max_tokens: usize,
+    #[serde(default = "default_post_process_local_temperature")]
+    pub post_process_local_temperature: f64,
+    #[serde(default = "default_post_process_local_top_p")]
+    pub post_process_local_top_p: f64,
+    #[serde(default = "default_post_process_local_repetition_penalty")]
+    pub post_process_local_repetition_penalty: f64,
+    #[serde(default = "default_post_process_local_repetition_context_size")]
+    pub post_process_local_repetition_context_size: usize,
+    #[serde(default = "default_qwen_startup_preload_strategy")]
+    pub qwen_startup_preload_strategy: String,
+    #[serde(default = "default_qwen3_startup_preload_enabled")]
+    pub qwen3_startup_preload_enabled: bool,
+    #[serde(default = "default_qwen3_startup_preload_delay_ms")]
+    pub qwen3_startup_preload_delay_ms: u64,
+    #[serde(default = "default_qwen3_max_threads")]
+    pub qwen3_max_threads: usize,
+    #[serde(default = "default_qwen3_server_ready_timeout_sec")]
+    pub qwen3_server_ready_timeout_sec: u64,
+    #[serde(default = "default_qwen35_startup_preload_enabled")]
+    pub qwen35_startup_preload_enabled: bool,
+    #[serde(default = "default_qwen35_startup_preload_delay_ms")]
+    pub qwen35_startup_preload_delay_ms: u64,
+    #[serde(default = "default_qwen35_warmup_enabled")]
+    pub qwen35_warmup_enabled: bool,
+    #[serde(default = "default_qwen35_max_threads")]
+    pub qwen35_max_threads: usize,
+    #[serde(default = "default_qwen35_server_ready_timeout_sec")]
+    pub qwen35_server_ready_timeout_sec: u64,
+    #[serde(default = "default_qwen35_inference_timeout_sec")]
+    pub qwen35_inference_timeout_sec: u64,
     #[serde(default)]
     pub mute_while_recording: bool,
     #[serde(default)]
@@ -475,7 +513,134 @@ fn default_sound_theme() -> SoundTheme {
 }
 
 fn default_post_process_enabled() -> bool {
-    false
+    true
+}
+
+fn default_post_process_system_prompt() -> String {
+    "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n4. Never output explanations, bullet examples, wrappers, or meta commentary.\n5. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n6. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n7. If input content is empty, return an empty string.".to_string()
+}
+
+fn default_post_process_quality() -> String {
+    "balanced".to_string()
+}
+
+fn normalize_post_process_quality(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fast" => "fast".to_string(),
+        "quality" => "quality".to_string(),
+        _ => "balanced".to_string(),
+    }
+}
+
+fn default_post_process_local_max_tokens() -> usize {
+    192
+}
+
+fn default_post_process_local_temperature() -> f64 {
+    0.0
+}
+
+fn default_post_process_local_top_p() -> f64 {
+    1.0
+}
+
+fn default_post_process_local_repetition_penalty() -> f64 {
+    1.17
+}
+
+fn default_post_process_local_repetition_context_size() -> usize {
+    128
+}
+
+fn default_qwen_startup_preload_strategy() -> String {
+    "parallel".to_string()
+}
+
+fn default_qwen3_startup_preload_enabled() -> bool {
+    true
+}
+
+fn default_qwen3_startup_preload_delay_ms() -> u64 {
+    900
+}
+
+fn default_qwen3_max_threads() -> usize {
+    0
+}
+
+fn default_qwen3_server_ready_timeout_sec() -> u64 {
+    30
+}
+
+fn default_qwen35_startup_preload_enabled() -> bool {
+    true
+}
+
+fn default_qwen35_startup_preload_delay_ms() -> u64 {
+    1400
+}
+
+fn default_qwen35_warmup_enabled() -> bool {
+    true
+}
+
+fn default_qwen35_max_threads() -> usize {
+    0
+}
+
+fn default_qwen35_server_ready_timeout_sec() -> u64 {
+    90
+}
+
+fn default_qwen35_inference_timeout_sec() -> u64 {
+    45
+}
+
+fn normalize_post_process_local_max_tokens(value: usize) -> usize {
+    value.clamp(64, 512)
+}
+
+fn normalize_post_process_local_temperature(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
+fn normalize_post_process_local_top_p(value: f64) -> f64 {
+    value.clamp(0.1, 1.0)
+}
+
+fn normalize_post_process_local_repetition_penalty(value: f64) -> f64 {
+    value.clamp(1.0, 1.5)
+}
+
+fn normalize_post_process_local_repetition_context_size(value: usize) -> usize {
+    value.clamp(32, 256)
+}
+
+pub fn normalize_qwen_startup_preload_strategy(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "serial" => "serial".to_string(),
+        _ => "parallel".to_string(),
+    }
+}
+
+pub fn normalize_qwen_startup_preload_delay_ms(value: u64) -> u64 {
+    value.clamp(0, 15_000)
+}
+
+pub fn normalize_qwen_max_threads(value: usize) -> usize {
+    value.clamp(0, 16)
+}
+
+pub fn normalize_qwen3_server_ready_timeout_sec(value: u64) -> u64 {
+    value.clamp(10, 120)
+}
+
+pub fn normalize_qwen35_server_ready_timeout_sec(value: u64) -> u64 {
+    value.clamp(20, 300)
+}
+
+pub fn normalize_qwen35_inference_timeout_sec(value: u64) -> u64 {
+    value.clamp(5, 180)
 }
 
 fn default_app_language() -> String {
@@ -489,7 +654,7 @@ fn default_show_tray_icon() -> bool {
 }
 
 fn default_post_process_provider_id() -> String {
-    "openai".to_string()
+    LOCAL_QWEN35_PROVIDER_ID.to_string()
 }
 
 fn default_post_process_providers() -> Vec<PostProcessProvider> {
@@ -542,6 +707,14 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
             models_endpoint: Some("/models".to_string()),
             supports_structured_output: true,
         },
+        PostProcessProvider {
+            id: LOCAL_QWEN35_PROVIDER_ID.to_string(),
+            label: "Local".to_string(),
+            base_url: "local://qwen35".to_string(),
+            allow_base_url_edit: false,
+            models_endpoint: None,
+            supports_structured_output: false,
+        },
     ];
 
     // Note: We always include Apple Intelligence on macOS ARM64 without checking availability
@@ -585,6 +758,9 @@ fn default_model_for_provider(provider_id: &str) -> String {
     if provider_id == APPLE_INTELLIGENCE_PROVIDER_ID {
         return APPLE_INTELLIGENCE_DEFAULT_MODEL_ID.to_string();
     }
+    if provider_id == LOCAL_QWEN35_PROVIDER_ID {
+        return LOCAL_QWEN35_DEFAULT_MODEL_ID.to_string();
+    }
     String::new()
 }
 
@@ -600,11 +776,54 @@ fn default_post_process_models() -> HashMap<String, String> {
 }
 
 fn default_post_process_prompts() -> Vec<LLMPrompt> {
-    vec![LLMPrompt {
-        id: "default_improve_transcriptions".to_string(),
-        name: "Improve Transcriptions".to_string(),
-        prompt: "Clean this transcript:\n1. Fix spelling, capitalization, and punctuation errors\n2. Convert number words to digits (twenty-five → 25, ten percent → 10%, five dollars → $5)\n3. Replace spoken punctuation with symbols (period → ., comma → ,, question mark → ?)\n4. Remove filler words (um, uh, like as filler)\n5. Keep the language in the original version (if it was french, keep it in french for example)\n\nPreserve exact meaning and word order. Do not paraphrase or reorder content.\n\nReturn only the cleaned transcript.\n\nTranscript:\n${output}".to_string(),
-    }]
+    vec![
+        LLMPrompt {
+            id: "template_translate_english_default".to_string(),
+            name: "Translate to English (Default)".to_string(),
+            prompt: "Translate the transcript into natural English.\n\nInput:\n${output}\n\nRules:\n1. Translate all Chinese content, including short utterances.\n2. For short Chinese interjections, use concise natural English (e.g. 好 -> okay, 行 -> okay, 棒 -> great).\n3. For short standalone Chinese numerals, convert to Arabic digits (e.g. 一二三 -> 123). Do not apply digit substitution inside words or compounds.\n4. Preserve existing English words, names, acronyms, numbers, and mixed-language tokens when already correct.\n5. Output only the final translation text.".to_string(),
+        },
+        LLMPrompt {
+            id: "template_chinese_markdown_polish".to_string(),
+            name: "中文口语整理（Markdown）".to_string(),
+            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 内容是多点信息时用 Markdown 列表整理；短句则输出一行简洁文本。\n5. 仅输出最终结果，不要解释。".to_string(),
+        },
+    ]
+}
+
+fn is_legacy_default_translate_prompt(value: &str) -> bool {
+    value.trim() == "${output}"
+}
+
+fn is_prunable_legacy_preset_prompt(prompt: &LLMPrompt) -> bool {
+    if matches!(
+        prompt.id.as_str(),
+        "default_improve_transcriptions"
+            | "template_translate_english_strict"
+            | "template_translate_english_concise"
+            | "template_standard_normalize"
+            | "template_strict_literal"
+            | "template_readable_polish"
+            | "template_domain_tech"
+    ) {
+        return true;
+    }
+
+    let normalized_name = prompt.name.trim().to_ascii_lowercase();
+    let normalized_prompt = prompt.prompt.trim().to_ascii_lowercase();
+
+    if normalized_name == "english" && normalized_prompt == "translate it into english" {
+        return true;
+    }
+
+    prompt.name.trim() == "英语"
+        && prompt.prompt.trim() == "把${output}翻译成英语翻译成对应的英语。"
+}
+
+fn is_legacy_default_post_process_system_prompt(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed == "You are a strict transcription post-processor.\nOutput rules:\n1. Output only the final processed text.\n2. Do not include reasoning or analysis.\n3. Do not use <think> tags.\n4. Do not include bullet points, examples, or explanations.\n5. Keep original meaning and language unless explicitly requested otherwise."
+        || trimmed
+            == "You are a strict transcript translator.\nTask:\nTranslate incoming transcript text into natural English.\nOutput rules:\n1. Output English only.\n2. Always translate, including very short inputs (single-word or 1-3 character phrases).\n3. For short Chinese interjections, produce concise natural English (e.g. 好 -> okay, 棒 -> great, 行 -> okay).\n4. Convert Chinese numerals to English words when short and standalone (e.g. 一二三 -> one two three).\n5. Preserve existing English words, product names, acronyms, and numbers accurately (e.g. HANDY, Qwen3.5, 1.7B).\n6. Do not include reasoning, <think>, bullet points, or explanations.\n7. Return only the final translated text."
 }
 
 fn default_whisper_gpu_device() -> i32 {
@@ -625,6 +844,22 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
             .find(|p| p.id == provider.id)
         {
             Some(existing) => {
+                if existing.label != provider.label {
+                    existing.label = provider.label.clone();
+                    changed = true;
+                }
+                if existing.allow_base_url_edit != provider.allow_base_url_edit {
+                    existing.allow_base_url_edit = provider.allow_base_url_edit;
+                    changed = true;
+                }
+                if provider.id != "custom" && existing.base_url != provider.base_url {
+                    existing.base_url = provider.base_url.clone();
+                    changed = true;
+                }
+                if provider.id != "custom" && existing.models_endpoint != provider.models_endpoint {
+                    existing.models_endpoint = provider.models_endpoint.clone();
+                    changed = true;
+                }
                 // Sync supports_structured_output field for existing providers (migration)
                 if existing.supports_structured_output != provider.supports_structured_output {
                     debug!(
@@ -666,6 +901,182 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
                 changed = true;
             }
         }
+    }
+
+    for default_prompt in default_post_process_prompts() {
+        match settings
+            .post_process_prompts
+            .iter_mut()
+            .find(|prompt| prompt.id == default_prompt.id)
+        {
+            Some(existing) => {
+                if existing.name != default_prompt.name {
+                    existing.name = default_prompt.name.clone();
+                    changed = true;
+                }
+
+                let should_sync_prompt = existing.prompt.trim().is_empty()
+                    || (existing.id == "template_translate_english_default"
+                        && is_legacy_default_translate_prompt(&existing.prompt));
+                if should_sync_prompt && existing.prompt != default_prompt.prompt {
+                    existing.prompt = default_prompt.prompt.clone();
+                    changed = true;
+                }
+            }
+            None => {
+                settings.post_process_prompts.push(default_prompt);
+                changed = true;
+            }
+        }
+    }
+
+    let before_prune_len = settings.post_process_prompts.len();
+    settings
+        .post_process_prompts
+        .retain(|prompt| !is_prunable_legacy_preset_prompt(prompt));
+    if settings.post_process_prompts.len() != before_prune_len {
+        changed = true;
+    }
+
+    let provider_is_valid = settings
+        .post_process_providers
+        .iter()
+        .any(|provider| provider.id == settings.post_process_provider_id);
+    if !provider_is_valid {
+        settings.post_process_provider_id = default_post_process_provider_id();
+        changed = true;
+    }
+
+    let selected_prompt_is_valid = settings
+        .post_process_selected_prompt_id
+        .as_ref()
+        .is_some_and(|selected_id| {
+            settings
+                .post_process_prompts
+                .iter()
+                .any(|prompt| prompt.id == *selected_id)
+        });
+
+    if !selected_prompt_is_valid {
+        let fallback_id = if settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.id == "template_translate_english_default")
+        {
+            Some("template_translate_english_default".to_string())
+        } else {
+            settings.post_process_prompts.first().map(|p| p.id.clone())
+        };
+
+        if settings.post_process_selected_prompt_id != fallback_id {
+            settings.post_process_selected_prompt_id = fallback_id;
+            changed = true;
+        }
+    }
+
+    if settings.post_process_system_prompt.trim().is_empty()
+        || is_legacy_default_post_process_system_prompt(&settings.post_process_system_prompt)
+    {
+        settings.post_process_system_prompt = default_post_process_system_prompt();
+        changed = true;
+    }
+
+    let normalized_quality = normalize_post_process_quality(&settings.post_process_quality);
+    if settings.post_process_quality != normalized_quality {
+        settings.post_process_quality = normalized_quality;
+        changed = true;
+    }
+
+    let normalized_max_tokens =
+        normalize_post_process_local_max_tokens(settings.post_process_local_max_tokens);
+    if settings.post_process_local_max_tokens != normalized_max_tokens {
+        settings.post_process_local_max_tokens = normalized_max_tokens;
+        changed = true;
+    }
+
+    let normalized_temperature =
+        normalize_post_process_local_temperature(settings.post_process_local_temperature);
+    if (settings.post_process_local_temperature - normalized_temperature).abs() > f64::EPSILON {
+        settings.post_process_local_temperature = normalized_temperature;
+        changed = true;
+    }
+
+    let normalized_top_p = normalize_post_process_local_top_p(settings.post_process_local_top_p);
+    if (settings.post_process_local_top_p - normalized_top_p).abs() > f64::EPSILON {
+        settings.post_process_local_top_p = normalized_top_p;
+        changed = true;
+    }
+
+    let normalized_repetition_penalty = normalize_post_process_local_repetition_penalty(
+        settings.post_process_local_repetition_penalty,
+    );
+    if (settings.post_process_local_repetition_penalty - normalized_repetition_penalty).abs()
+        > f64::EPSILON
+    {
+        settings.post_process_local_repetition_penalty = normalized_repetition_penalty;
+        changed = true;
+    }
+
+    let normalized_repetition_context_size = normalize_post_process_local_repetition_context_size(
+        settings.post_process_local_repetition_context_size,
+    );
+    if settings.post_process_local_repetition_context_size != normalized_repetition_context_size {
+        settings.post_process_local_repetition_context_size = normalized_repetition_context_size;
+        changed = true;
+    }
+
+    let normalized_preload_strategy =
+        normalize_qwen_startup_preload_strategy(&settings.qwen_startup_preload_strategy);
+    if settings.qwen_startup_preload_strategy != normalized_preload_strategy {
+        settings.qwen_startup_preload_strategy = normalized_preload_strategy;
+        changed = true;
+    }
+
+    let normalized_qwen3_delay =
+        normalize_qwen_startup_preload_delay_ms(settings.qwen3_startup_preload_delay_ms);
+    if settings.qwen3_startup_preload_delay_ms != normalized_qwen3_delay {
+        settings.qwen3_startup_preload_delay_ms = normalized_qwen3_delay;
+        changed = true;
+    }
+
+    let normalized_qwen3_threads = normalize_qwen_max_threads(settings.qwen3_max_threads);
+    if settings.qwen3_max_threads != normalized_qwen3_threads {
+        settings.qwen3_max_threads = normalized_qwen3_threads;
+        changed = true;
+    }
+
+    let normalized_qwen3_timeout =
+        normalize_qwen3_server_ready_timeout_sec(settings.qwen3_server_ready_timeout_sec);
+    if settings.qwen3_server_ready_timeout_sec != normalized_qwen3_timeout {
+        settings.qwen3_server_ready_timeout_sec = normalized_qwen3_timeout;
+        changed = true;
+    }
+
+    let normalized_qwen35_delay =
+        normalize_qwen_startup_preload_delay_ms(settings.qwen35_startup_preload_delay_ms);
+    if settings.qwen35_startup_preload_delay_ms != normalized_qwen35_delay {
+        settings.qwen35_startup_preload_delay_ms = normalized_qwen35_delay;
+        changed = true;
+    }
+
+    let normalized_qwen35_threads = normalize_qwen_max_threads(settings.qwen35_max_threads);
+    if settings.qwen35_max_threads != normalized_qwen35_threads {
+        settings.qwen35_max_threads = normalized_qwen35_threads;
+        changed = true;
+    }
+
+    let normalized_qwen35_server_timeout =
+        normalize_qwen35_server_ready_timeout_sec(settings.qwen35_server_ready_timeout_sec);
+    if settings.qwen35_server_ready_timeout_sec != normalized_qwen35_server_timeout {
+        settings.qwen35_server_ready_timeout_sec = normalized_qwen35_server_timeout;
+        changed = true;
+    }
+
+    let normalized_qwen35_inference_timeout =
+        normalize_qwen35_inference_timeout_sec(settings.qwen35_inference_timeout_sec);
+    if settings.qwen35_inference_timeout_sec != normalized_qwen35_inference_timeout {
+        settings.qwen35_inference_timeout_sec = normalized_qwen35_inference_timeout;
+        changed = true;
     }
 
     changed
@@ -759,7 +1170,26 @@ pub fn get_default_settings() -> AppSettings {
         post_process_api_keys: default_post_process_api_keys(),
         post_process_models: default_post_process_models(),
         post_process_prompts: default_post_process_prompts(),
-        post_process_selected_prompt_id: None,
+        post_process_selected_prompt_id: Some("template_translate_english_default".to_string()),
+        post_process_system_prompt: default_post_process_system_prompt(),
+        post_process_quality: default_post_process_quality(),
+        post_process_local_max_tokens: default_post_process_local_max_tokens(),
+        post_process_local_temperature: default_post_process_local_temperature(),
+        post_process_local_top_p: default_post_process_local_top_p(),
+        post_process_local_repetition_penalty: default_post_process_local_repetition_penalty(),
+        post_process_local_repetition_context_size:
+            default_post_process_local_repetition_context_size(),
+        qwen_startup_preload_strategy: default_qwen_startup_preload_strategy(),
+        qwen3_startup_preload_enabled: default_qwen3_startup_preload_enabled(),
+        qwen3_startup_preload_delay_ms: default_qwen3_startup_preload_delay_ms(),
+        qwen3_max_threads: default_qwen3_max_threads(),
+        qwen3_server_ready_timeout_sec: default_qwen3_server_ready_timeout_sec(),
+        qwen35_startup_preload_enabled: default_qwen35_startup_preload_enabled(),
+        qwen35_startup_preload_delay_ms: default_qwen35_startup_preload_delay_ms(),
+        qwen35_warmup_enabled: default_qwen35_warmup_enabled(),
+        qwen35_max_threads: default_qwen35_max_threads(),
+        qwen35_server_ready_timeout_sec: default_qwen35_server_ready_timeout_sec(),
+        qwen35_inference_timeout_sec: default_qwen35_inference_timeout_sec(),
         mute_while_recording: false,
         append_trailing_space: false,
         app_language: default_app_language(),
@@ -917,5 +1347,71 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_keeps_openai_selection_without_key_or_model() {
+        let mut settings = get_default_settings();
+        settings.post_process_provider_id = "openai".to_string();
+        settings
+            .post_process_api_keys
+            .insert("openai".to_string(), String::new());
+        settings
+            .post_process_models
+            .insert("openai".to_string(), String::new());
+
+        let _ = ensure_post_process_defaults(&mut settings);
+
+        assert_eq!(settings.post_process_provider_id, "openai");
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_migrates_local_provider_label() {
+        let mut settings = get_default_settings();
+        if let Some(local) = settings.post_process_provider_mut(LOCAL_QWEN35_PROVIDER_ID) {
+            local.label = "Local Qwen3.5".to_string();
+        }
+
+        let changed = ensure_post_process_defaults(&mut settings);
+        assert!(changed);
+        let local = settings
+            .post_process_provider(LOCAL_QWEN35_PROVIDER_ID)
+            .expect("local provider must exist");
+        assert_eq!(local.label, "Local");
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_migrates_legacy_translation_template_text() {
+        let mut settings = get_default_settings();
+        let translate = settings
+            .post_process_prompts
+            .iter_mut()
+            .find(|prompt| prompt.id == "template_translate_english_default")
+            .expect("translation template should exist");
+        translate.prompt = "${output}".to_string();
+
+        let changed = ensure_post_process_defaults(&mut settings);
+        assert!(changed);
+
+        let translate = settings
+            .post_process_prompts
+            .iter()
+            .find(|prompt| prompt.id == "template_translate_english_default")
+            .expect("translation template should exist");
+        assert!(translate.prompt.contains("Translate the transcript into natural English."));
+        assert!(translate.prompt.contains("一二三 -> 123"));
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_migrates_legacy_translation_system_prompt() {
+        let mut settings = get_default_settings();
+        settings.post_process_system_prompt = "You are a strict transcript translator.\nTask:\nTranslate incoming transcript text into natural English.\nOutput rules:\n1. Output English only.\n2. Always translate, including very short inputs (single-word or 1-3 character phrases).\n3. For short Chinese interjections, produce concise natural English (e.g. 好 -> okay, 棒 -> great, 行 -> okay).\n4. Convert Chinese numerals to English words when short and standalone (e.g. 一二三 -> one two three).\n5. Preserve existing English words, product names, acronyms, and numbers accurately (e.g. HANDY, Qwen3.5, 1.7B).\n6. Do not include reasoning, <think>, bullet points, or explanations.\n7. Return only the final translated text.".to_string();
+
+        let changed = ensure_post_process_defaults(&mut settings);
+        assert!(changed);
+        assert_eq!(
+            settings.post_process_system_prompt,
+            default_post_process_system_prompt()
+        );
     }
 }

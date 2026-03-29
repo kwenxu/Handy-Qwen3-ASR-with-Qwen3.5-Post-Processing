@@ -62,22 +62,26 @@
   }
 }
 
-/* macOS - tint native overlay scrollbar thumb */
-:root[data-platform="macos"] {
+/* Keep all vertical/horizontal scrollbar tracks transparent and thumb subtle */
+:root,
+* {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
-/* Custom Scrollbar - only on Windows/Linux; macOS uses native overlay scrollbars */
-:root:not([data-platform="macos"]) ::-webkit-scrollbar {
+:root ::-webkit-scrollbar {
   width: 14px;
   height: 14px;
 }
 
-:root:not([data-platform="macos"]) ::-webkit-scrollbar-track {
+:root ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-:root:not([data-platform="macos"]) ::-webkit-scrollbar-thumb {
+:root ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root ::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 20px;
   border: 3px solid transparent;
@@ -87,8 +91,15 @@
   min-height: 32px;
 }
 
-:root:not([data-platform="macos"]) ::-webkit-scrollbar-thumb:hover {
+:root ::-webkit-scrollbar-thumb:hover {
   background-color: var(--scrollbar-thumb-hover);
+}
+
+textarea::-webkit-resizer {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  opacity: 0;
 }
 
 @layer utilities {

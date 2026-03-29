@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Ogólne",
-    "models": "Modele",
+    "models": "Transcription Models",
     "advanced": "Zaawansowane",
     "postProcessing": "Postproces",
     "history": "Historia",
     "debug": "Debugowanie",
-    "about": "O programie"
+    "about": "O programie",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Aby rozpocząć, wybierz model transkrypcji",

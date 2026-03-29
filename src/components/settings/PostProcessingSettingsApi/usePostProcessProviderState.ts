@@ -10,6 +10,7 @@ type PostProcessProviderState = {
   selectedProvider: PostProcessProvider | undefined;
   isCustomProvider: boolean;
   isAppleProvider: boolean;
+  isLocalProvider: boolean;
   appleIntelligenceUnavailable: boolean;
   baseUrl: string;
   handleBaseUrlChange: (value: string) => void;
@@ -29,6 +30,7 @@ type PostProcessProviderState = {
 };
 
 const APPLE_PROVIDER_ID = "apple_intelligence";
+const LOCAL_PROVIDER_ID = "local-qwen35";
 
 export const usePostProcessProviderState = (): PostProcessProviderState => {
   const {
@@ -46,7 +48,11 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   const providers = settings?.post_process_providers || [];
 
   const selectedProviderId = useMemo(() => {
-    return settings?.post_process_provider_id || providers[0]?.id || "openai";
+    return (
+      settings?.post_process_provider_id ||
+      providers[0]?.id ||
+      LOCAL_PROVIDER_ID
+    );
   }, [providers, settings?.post_process_provider_id]);
 
   const selectedProvider = useMemo(() => {
@@ -57,6 +63,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   }, [providers, selectedProviderId]);
 
   const isAppleProvider = selectedProvider?.id === APPLE_PROVIDER_ID;
+  const isLocalProvider = selectedProvider?.id === LOCAL_PROVIDER_ID;
   const [appleIntelligenceUnavailable, setAppleIntelligenceUnavailable] =
     useState(false);
 
@@ -66,10 +73,25 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
 
   const providerOptions = useMemo<DropdownOption[]>(() => {
-    return providers.map((provider) => ({
-      value: provider.id,
-      label: provider.label,
-    }));
+    const priority = (providerId: string): number => {
+      if (providerId === LOCAL_PROVIDER_ID) return 0;
+      if (providerId === "custom") return 1;
+      if (providerId === "openai") return 2;
+      return 10;
+    };
+
+    return providers
+      .map((provider, index) => ({
+        value: provider.id,
+        label: provider.id === LOCAL_PROVIDER_ID ? "Local" : provider.label,
+        index,
+      }))
+      .sort((a, b) => {
+        const rankDiff = priority(a.value) - priority(b.value);
+        if (rankDiff !== 0) return rankDiff;
+        return a.index - b.index;
+      })
+      .map(({ value, label }) => ({ value, label }));
   }, [providers]);
 
   const handleProviderSelect = useCallback(
@@ -102,7 +124,10 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
         const hasBaseUrl = (provider?.base_url ?? "").trim() !== "";
         const hasApiKey = apiKey.trim() !== "";
 
-        if (provider?.id === "custom" ? hasBaseUrl : hasApiKey) {
+        if (
+          provider?.id === LOCAL_PROVIDER_ID ||
+          (provider?.id === "custom" ? hasBaseUrl : hasApiKey)
+        ) {
           void fetchPostProcessModels(providerId);
         }
       }
@@ -215,6 +240,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     selectedProvider,
     isCustomProvider,
     isAppleProvider,
+    isLocalProvider,
     appleIntelligenceUnavailable,
     baseUrl,
     handleBaseUrlChange,

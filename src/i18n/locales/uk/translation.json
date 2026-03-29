@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Загальні",
-    "models": "Моделі",
+    "models": "Transcription Models",
     "advanced": "Розширені",
     "postProcessing": "Постобробка",
     "history": "Історія",
     "debug": "Дебаг",
-    "about": "Інфо"
+    "about": "Інфо",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Для початку оберіть модель транскрипції",

@@ -1,6 +1,14 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Cog, FlaskConical, History, Info, Sparkles, Cpu } from "lucide-react";
+import {
+  Cog,
+  FlaskConical,
+  History,
+  Info,
+  Sparkles,
+  Cpu,
+  Gauge,
+} from "lucide-react";
 import HandyTextLogo from "./icons/HandyTextLogo";
 import HandyHand from "./icons/HandyHand";
 import { useSettings } from "../hooks/useSettings";
@@ -12,6 +20,7 @@ import {
   AboutSettings,
   PostProcessingSettings,
   ModelsSettings,
+  PerformanceSettings,
 } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
@@ -38,10 +47,22 @@ export const SECTIONS_CONFIG = {
     component: GeneralSettings,
     enabled: () => true,
   },
+  postprocessing: {
+    labelKey: "sidebar.postProcessing",
+    icon: Sparkles,
+    component: PostProcessingSettings,
+    enabled: (settings) => settings?.post_process_enabled ?? false,
+  },
   models: {
     labelKey: "sidebar.models",
     icon: Cpu,
     component: ModelsSettings,
+    enabled: () => true,
+  },
+  performance: {
+    labelKey: "sidebar.performance",
+    icon: Gauge,
+    component: PerformanceSettings,
     enabled: () => true,
   },
   advanced: {
@@ -55,12 +76,6 @@ export const SECTIONS_CONFIG = {
     icon: History,
     component: HistorySettings,
     enabled: () => true,
-  },
-  postprocessing: {
-    labelKey: "sidebar.postProcessing",
-    icon: Sparkles,
-    component: PostProcessingSettings,
-    enabled: (settings) => settings?.post_process_enabled ?? false,
   },
   debug: {
     labelKey: "sidebar.debug",

@@ -24,7 +24,7 @@ use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
     OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    APPLE_INTELLIGENCE_PROVIDER_ID, LOCAL_QWEN35_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -817,6 +817,224 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_post_process_system_prompt_setting(
+    app: AppHandle,
+    system_prompt: String,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let trimmed = system_prompt.trim();
+    if trimmed.is_empty() {
+        return Err("System prompt cannot be empty".to_string());
+    }
+    settings.post_process_system_prompt = trimmed.to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_quality_setting(app: AppHandle, quality: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let normalized = quality.trim().to_ascii_lowercase();
+    settings.post_process_quality = match normalized.as_str() {
+        "fast" => "fast".to_string(),
+        "quality" => "quality".to_string(),
+        "" | "balanced" => "balanced".to_string(),
+        _ => {
+            return Err("Quality must be one of: fast, balanced, quality".to_string());
+        }
+    };
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_local_max_tokens_setting(
+    app: AppHandle,
+    value: usize,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_local_max_tokens = value.clamp(64, 512);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_local_temperature_setting(
+    app: AppHandle,
+    value: f64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_local_temperature = value.clamp(0.0, 1.0);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_local_top_p_setting(app: AppHandle, value: f64) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_local_top_p = value.clamp(0.1, 1.0);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_local_repetition_penalty_setting(
+    app: AppHandle,
+    value: f64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_local_repetition_penalty = value.clamp(1.0, 1.5);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_local_repetition_context_size_setting(
+    app: AppHandle,
+    value: usize,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_local_repetition_context_size = value.clamp(32, 256);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen_startup_preload_strategy_setting(
+    app: AppHandle,
+    strategy: String,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen_startup_preload_strategy =
+        settings::normalize_qwen_startup_preload_strategy(strategy.trim());
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen3_startup_preload_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen3_startup_preload_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen3_startup_preload_delay_ms_setting(
+    app: AppHandle,
+    value: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen3_startup_preload_delay_ms =
+        settings::normalize_qwen_startup_preload_delay_ms(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen3_max_threads_setting(app: AppHandle, value: usize) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen3_max_threads = settings::normalize_qwen_max_threads(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen3_server_ready_timeout_sec_setting(
+    app: AppHandle,
+    value: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen3_server_ready_timeout_sec =
+        settings::normalize_qwen3_server_ready_timeout_sec(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_startup_preload_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_startup_preload_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_startup_preload_delay_ms_setting(
+    app: AppHandle,
+    value: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_startup_preload_delay_ms =
+        settings::normalize_qwen_startup_preload_delay_ms(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_warmup_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_warmup_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_max_threads_setting(app: AppHandle, value: usize) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_max_threads = settings::normalize_qwen_max_threads(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_server_ready_timeout_sec_setting(
+    app: AppHandle,
+    value: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_server_ready_timeout_sec =
+        settings::normalize_qwen35_server_ready_timeout_sec(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_qwen35_inference_timeout_sec_setting(
+    app: AppHandle,
+    value: u64,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen35_inference_timeout_sec = settings::normalize_qwen35_inference_timeout_sec(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_experimental_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.experimental_enabled = enabled;
@@ -996,6 +1214,19 @@ pub async fn fetch_post_process_models(
         .iter()
         .find(|p| p.id == provider_id)
         .ok_or_else(|| format!("Provider '{}' not found", provider_id))?;
+
+    if provider.id == LOCAL_QWEN35_PROVIDER_ID {
+        let manager = app
+            .state::<std::sync::Arc<crate::managers::post_process_model::PostProcessModelManager>>(
+            );
+        let mut ids = manager.get_model_ids();
+        // Keep a stable UX order by moving default balance model to front.
+        if let Some(pos) = ids.iter().position(|id| id == "qwen35-optiq-2b") {
+            let default_id = ids.remove(pos);
+            ids.insert(0, default_id);
+        }
+        return Ok(ids);
+    }
 
     if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

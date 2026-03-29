@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Общи",
-    "models": "Модели",
+    "models": "Transcription Models",
     "advanced": "Разширени",
     "postProcessing": "Постобработка",
     "history": "История",
     "debug": "Отстраняване",
-    "about": "За приложението"
+    "about": "За приложението",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "За да започнете, изберете модел за транскрипция",

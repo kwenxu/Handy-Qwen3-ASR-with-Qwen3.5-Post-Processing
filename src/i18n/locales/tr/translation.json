@@ -10,12 +10,13 @@
   },
   "sidebar": {
     "general": "Genel",
-    "models": "Modeller",
+    "models": "Transcription Models",
     "advanced": "Gelişmiş",
     "postProcessing": "Son İşlem",
     "history": "Geçmiş",
     "debug": "Hata Ayıklama",
-    "about": "Hakkında"
+    "about": "Hakkında",
+    "performance": "Performance"
   },
   "onboarding": {
     "subtitle": "Başlamak için bir transkripsiyon modeli seçin",
