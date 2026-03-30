@@ -409,6 +409,10 @@
           "label": "Load Qwen3 transcription on startup",
           "description": "When enabled, Handy loads the currently selected Qwen3 transcription model on launch to reduce first-run latency."
         },
+        "qwen3Warmup": {
+          "label": "Run quick warmup after load",
+          "description": "Enabled by default. Runs one short warmup inference after each cold reload of the transcription model to reduce first-transcription delay."
+        },
         "qwen35Preload": {
           "label": "Load Qwen3.5 post-processing on startup",
           "description": "When enabled, Handy preloads the selected local Qwen3.5 post-processing model at startup (local provider only)."

@@ -407,6 +407,8 @@ pub struct AppSettings {
     pub qwen3_max_threads: usize,
     #[serde(default = "default_qwen3_server_ready_timeout_sec")]
     pub qwen3_server_ready_timeout_sec: u64,
+    #[serde(default = "default_qwen3_warmup_enabled")]
+    pub qwen3_warmup_enabled: bool,
     #[serde(default = "default_qwen35_startup_preload_enabled")]
     pub qwen35_startup_preload_enabled: bool,
     #[serde(default = "default_qwen35_startup_preload_delay_ms")]
@@ -547,19 +549,19 @@ fn default_post_process_local_max_tokens() -> usize {
 }
 
 fn default_post_process_local_temperature() -> f64 {
-    0.0
+    0.07
 }
 
 fn default_post_process_local_top_p() -> f64 {
-    1.0
+    0.82
 }
 
 fn default_post_process_local_repetition_penalty() -> f64 {
-    1.17
+    1.15
 }
 
 fn default_post_process_local_repetition_context_size() -> usize {
-    128
+    160
 }
 
 fn default_qwen_startup_preload_strategy() -> String {
@@ -596,6 +598,10 @@ fn default_qwen3_max_threads() -> usize {
 
 fn default_qwen3_server_ready_timeout_sec() -> u64 {
     30
+}
+
+fn default_qwen3_warmup_enabled() -> bool {
+    true
 }
 
 fn default_qwen35_startup_preload_enabled() -> bool {
@@ -819,7 +825,7 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         LLMPrompt {
             id: "template_chinese_markdown_polish".to_string(),
             name: "中文口语整理（Markdown）".to_string(),
-            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）。不要把词内字符误替换（例如“一些”不能变成“1些”）。\n5. 如内容包含“第一点/第二点/第X点/1、2、3”等并列结构，输出为 Markdown 列表；否则输出一行简洁文本。\n6. 禁止输出本模板条款本身（例如“1. 保持原意与事实...”这类说明文字）。\n7. 仅输出最终结果，不要解释。".to_string(),
+            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要输出“要求/规则/输入”等模板文字。\n2. 保持原意，去口头重复和语气词；专有名词、产品名、模型名、缩写、URL、代码保持原样；中文数字按语义转阿拉伯数字（如“零点8B/零点八B -> 0.8B”，“两B -> 2B”），但不要词内替换（如“一些”不能变“1些”）。\n3. 列表优先：只要出现并列观点或序号信号（如“第一/第二/另外/最后/1、2、3/请列出/分点”），必须输出 Markdown 有序列表；否则输出一行简洁文本。\n\n示例：\n- 输入：第一点要控糖，第二点要早睡，第三点要运动。\n  输出：\n  1. 要控糖。\n  2. 要早睡。\n  3. 要运动。\n- 输入：嗯这个模型还可以吧。\n  输出：这个模型还可以。".to_string(),
         },
     ]
 }
@@ -837,6 +843,10 @@ fn is_legacy_default_chinese_markdown_prompt(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed
         == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 内容是多点信息时用 Markdown 列表整理；短句则输出一行简洁文本。\n5. 仅输出最终结果，不要解释。"
+        || trimmed
+            == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）。不要把词内字符误替换（例如“一些”不能变成“1些”）。\n5. 如内容包含“第一点/第二点/第X点/1、2、3”等并列结构，输出为 Markdown 列表；否则输出一行简洁文本。\n6. 禁止输出本模板条款本身（例如“1. 保持原意与事实...”这类说明文字）。\n7. 仅输出最终结果，不要解释。"
+        || trimmed
+            == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要复述“要求/规则/输入”等模板内容。\n2. 保持原意与事实，去除口头重复和明显噪音；专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n3. 列表优先：若出现两个及以上并列观点，或含“第一点/第二点/另外/最后/1、2、3”等序列信号，必须输出 Markdown 有序列表（每点一行简短句）。\n4. 非列表场景输出一行简洁文本。\n5. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）；不要词内替换（例如“一些”不能变成“1些”）。"
 }
 
 fn is_prunable_legacy_preset_prompt(prompt: &LLMPrompt) -> bool {
@@ -1264,6 +1274,7 @@ pub fn get_default_settings() -> AppSettings {
         qwen3_startup_preload_delay_ms: default_qwen3_startup_preload_delay_ms(),
         qwen3_max_threads: default_qwen3_max_threads(),
         qwen3_server_ready_timeout_sec: default_qwen3_server_ready_timeout_sec(),
+        qwen3_warmup_enabled: default_qwen3_warmup_enabled(),
         qwen35_startup_preload_enabled: default_qwen35_startup_preload_enabled(),
         qwen35_startup_preload_delay_ms: default_qwen35_startup_preload_delay_ms(),
         qwen35_warmup_enabled: default_qwen35_warmup_enabled(),

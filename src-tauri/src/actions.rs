@@ -441,6 +441,24 @@ fn looks_like_instruction_template_line(line: &str, template_keys: &[String]) ->
     })
 }
 
+fn looks_like_rule_enumeration_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let mut chars = trimmed.chars().peekable();
+    let mut saw_digit = false;
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            chars.next();
+            continue;
+        }
+        break;
+    }
+    if !saw_digit {
+        return false;
+    }
+    matches!(chars.peek().copied(), Some('.' | '、' | ')' | '）' | ':'))
+}
+
 fn prefix_chars_equal(a: &str, b: &str, n: usize) -> bool {
     a.chars().take(n).eq(b.chars().take(n))
 }
@@ -488,9 +506,19 @@ fn reject_post_output_reason(output: &str, prompt_template: &str) -> Option<&'st
     if output.contains("${output}") {
         return Some("prompt_placeholder_leakage");
     }
+    let output_lower = output.to_ascii_lowercase();
+    if output.contains("要求：")
+        || output.contains("规则：")
+        || output.contains("Output contract:")
+        || output_lower.contains("rules:")
+        || output_lower.contains("input:")
+    {
+        return Some("template_header_leakage");
+    }
     let template_keys = extract_template_rule_keys(prompt_template);
     let mut suspicious_lines = 0usize;
     let mut total_non_empty = 0usize;
+    let mut enum_rule_lines = 0usize;
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -500,6 +528,12 @@ fn reject_post_output_reason(output: &str, prompt_template: &str) -> Option<&'st
         if looks_like_instruction_template_line(trimmed, &template_keys) {
             suspicious_lines += 1;
         }
+        if looks_like_rule_enumeration_line(trimmed) {
+            enum_rule_lines += 1;
+        }
+    }
+    if enum_rule_lines >= 2 && suspicious_lines >= 1 {
+        return Some("enumerated_rule_leakage");
     }
     if suspicious_lines >= 2 && suspicious_lines * 2 >= total_non_empty {
         return Some("prompt_template_leakage");
@@ -647,6 +681,35 @@ async fn post_process_transcription(
             if let Some(reason) = reject_post_output_reason(&first_clean, &local_prompt_template) {
                 warn!(
                     "Local Qwen3.5 first pass rejected (reason={}, template_id={})",
+                    reason, local_template_id
+                );
+            }
+
+            // Retry once when first pass leaks template/instructions.
+            // This especially helps immediately after model switch/cold load.
+            let second = manager.process_text(
+                &local_model,
+                &local_user_content_for_infer,
+                &local_system_prompt,
+                Some(local_template_id.as_str()),
+                local_quality.max_tokens,
+                local_quality.temperature,
+                local_quality.top_p,
+                local_quality.repetition_penalty,
+                local_quality.repetition_context_size,
+            )?;
+
+            let second_clean = normalize_post_process_candidate(
+                &second,
+                &local_prompt_template,
+                local_force_arabic_digits,
+            );
+            if !should_reject_post_output(&second_clean, &local_prompt_template) {
+                return Ok(second_clean);
+            }
+            if let Some(reason) = reject_post_output_reason(&second_clean, &local_prompt_template) {
+                warn!(
+                    "Local Qwen3.5 second pass rejected (reason={}, template_id={})",
                     reason, local_template_id
                 );
             }

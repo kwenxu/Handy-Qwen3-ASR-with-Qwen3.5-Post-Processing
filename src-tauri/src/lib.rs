@@ -466,6 +466,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_qwen3_startup_preload_delay_ms_setting,
             shortcut::change_qwen3_max_threads_setting,
             shortcut::change_qwen3_server_ready_timeout_sec_setting,
+            shortcut::change_qwen3_warmup_enabled_setting,
             shortcut::change_qwen35_startup_preload_enabled_setting,
             shortcut::change_qwen35_startup_preload_delay_ms_setting,
             shortcut::change_qwen35_warmup_enabled_setting,

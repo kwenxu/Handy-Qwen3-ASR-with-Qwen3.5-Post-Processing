@@ -105,6 +105,7 @@ export const PerformanceSettings: React.FC = () => {
     "parallel";
   const qwen3StartupPreloadEnabled =
     getSetting("qwen3_startup_preload_enabled") ?? true;
+  const qwen3WarmupEnabled = getSetting("qwen3_warmup_enabled") ?? true;
   const qwen35StartupPreloadEnabled =
     getSetting("qwen35_startup_preload_enabled") ?? true;
   const qwen35WarmupEnabled = getSetting("qwen35_warmup_enabled") ?? true;
@@ -134,6 +135,18 @@ export const PerformanceSettings: React.FC = () => {
           description={t(
             "settings.performance.qwenPanel.qwen3Preload.description",
           )}
+          descriptionMode="tooltip"
+          grouped={true}
+        />
+
+        <ToggleSwitch
+          checked={qwen3WarmupEnabled}
+          onChange={(enabled) => {
+            void updateSetting("qwen3_warmup_enabled", enabled);
+          }}
+          isUpdating={isUpdating("qwen3_warmup_enabled")}
+          label={t("settings.performance.qwenPanel.qwen3Warmup.label")}
+          description={t("settings.performance.qwenPanel.qwen3Warmup.description")}
           descriptionMode="tooltip"
           grouped={true}
         />

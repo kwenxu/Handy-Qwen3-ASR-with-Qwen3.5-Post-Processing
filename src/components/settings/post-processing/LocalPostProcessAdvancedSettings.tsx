@@ -21,24 +21,24 @@ type LocalPresetValues = {
 const LOCAL_PRESET_VALUES: Record<Exclude<LocalPresetKey, "custom">, LocalPresetValues> = {
   fast: {
     maxTokens: 128,
-    temperature: 0.0,
-    topP: 0.9,
-    repetitionPenalty: 1.08,
-    repetitionContextSize: 96,
+    temperature: 0.04,
+    topP: 0.72,
+    repetitionPenalty: 1.12,
+    repetitionContextSize: 128,
   },
   balanced: {
     maxTokens: 192,
-    temperature: 0.0,
-    topP: 1.0,
-    repetitionPenalty: 1.17,
-    repetitionContextSize: 128,
+    temperature: 0.07,
+    topP: 0.82,
+    repetitionPenalty: 1.15,
+    repetitionContextSize: 160,
   },
   quality: {
-    maxTokens: 256,
+    maxTokens: 288,
     temperature: 0.1,
-    topP: 1.0,
-    repetitionPenalty: 1.1,
-    repetitionContextSize: 160,
+    topP: 0.9,
+    repetitionPenalty: 1.18,
+    repetitionContextSize: 192,
   },
 };
 
@@ -55,14 +55,14 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     getSetting("post_process_local_max_tokens") || 192,
   );
   const currentLocalTemperature = Number(
-    getSetting("post_process_local_temperature") || 0,
+    getSetting("post_process_local_temperature") || 0.07,
   );
-  const currentLocalTopP = Number(getSetting("post_process_local_top_p") || 1);
+  const currentLocalTopP = Number(getSetting("post_process_local_top_p") || 0.82);
   const currentLocalRepetitionPenalty = Number(
-    getSetting("post_process_local_repetition_penalty") || 1.17,
+    getSetting("post_process_local_repetition_penalty") || 1.15,
   );
   const currentLocalRepetitionContextSize = Number(
-    getSetting("post_process_local_repetition_context_size") || 128,
+    getSetting("post_process_local_repetition_context_size") || 160,
   );
   const currentLocalQuality = (
     getSetting("post_process_quality") || "balanced"

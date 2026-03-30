@@ -159,6 +159,8 @@ const settingUpdaters: {
     commands.changeQwen3MaxThreadsSetting(value as number),
   qwen3_server_ready_timeout_sec: (value) =>
     commands.changeQwen3ServerReadyTimeoutSecSetting(value as number),
+  qwen3_warmup_enabled: (value) =>
+    commands.changeQwen3WarmupEnabledSetting(value as boolean),
   qwen35_startup_preload_enabled: (value) =>
     commands.changeQwen35StartupPreloadEnabledSetting(value as boolean),
   qwen35_startup_preload_delay_ms: (value) =>

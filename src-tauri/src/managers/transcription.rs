@@ -315,11 +315,14 @@ impl TranscriptionManager {
                     emit_loading_failed(&error_msg);
                     anyhow::anyhow!(error_msg)
                 })?;
-                // Cold-load warmup: run one tiny silent pass to reduce first real-call latency.
-                if let Err(err) = engine
-                    .transcribe_samples(vec![0.0_f32; 1600], Some(Qwen3InferenceParams::default()))
-                {
-                    warn!("Qwen3 warmup after load failed (non-fatal): {}", err);
+                if qwen_settings.qwen3_warmup_enabled {
+                    // Cold-load warmup: run one tiny silent pass to reduce first real-call latency.
+                    if let Err(err) = engine.transcribe_samples(
+                        vec![0.0_f32; 1600],
+                        Some(Qwen3InferenceParams::default()),
+                    ) {
+                        warn!("Qwen3 warmup after load failed (non-fatal): {}", err);
+                    }
                 }
                 LoadedEngine::Qwen3(engine)
             }

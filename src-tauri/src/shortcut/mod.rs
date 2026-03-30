@@ -1022,6 +1022,15 @@ pub fn change_qwen3_server_ready_timeout_sec_setting(
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_qwen3_warmup_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.qwen3_warmup_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_qwen35_startup_preload_enabled_setting(
     app: AppHandle,
     enabled: bool,
