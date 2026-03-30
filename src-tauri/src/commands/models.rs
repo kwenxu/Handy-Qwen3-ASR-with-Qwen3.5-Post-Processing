@@ -1,6 +1,6 @@
 use crate::managers::model::{ModelInfo, ModelManager};
-use crate::managers::transcription::{ModelStateEvent, TranscriptionManager};
-use crate::settings::{get_settings, write_settings, ModelUnloadTimeout};
+use crate::managers::transcription::TranscriptionManager;
+use crate::settings::{get_settings, write_settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -72,8 +72,7 @@ pub async fn delete_model(
 /// and the tray menu handler.
 ///
 /// Validates the model, updates the persisted setting, and loads the model
-/// unless the unload timeout is set to "Immediately" (in which case the model
-/// will be loaded on-demand during the next transcription).
+/// and eagerly loads the selected model.
 pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String> {
     let model_manager = app.state::<Arc<ModelManager>>();
     let transcription_manager = app.state::<Arc<TranscriptionManager>>();
@@ -95,7 +94,6 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
     }
 
     let settings = get_settings(app);
-    let unload_timeout = settings.model_unload_timeout;
     let old_model = settings.selected_model.clone();
 
     // Persist the new selection early so the frontend sees the correct model
@@ -121,27 +119,6 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
     }
 
     write_settings(app, settings);
-
-    // Skip eager loading if unload is set to "Immediately" — the model
-    // will be loaded on-demand during the next transcription.
-    if unload_timeout == ModelUnloadTimeout::Immediately {
-        // Notify frontend — load_model won't be called so no events
-        // would otherwise be emitted.
-        let _ = app.emit(
-            "model-state-changed",
-            ModelStateEvent {
-                event_type: "selection_changed".to_string(),
-                model_id: Some(model_id.to_string()),
-                model_name: Some(model_info.name.clone()),
-                error: None,
-            },
-        );
-        log::info!(
-            "Model selection changed to {} (not loading — unload set to Immediately).",
-            model_id
-        );
-        return Ok(());
-    }
 
     // Load the model. On failure, revert the persisted selection.
     if let Err(e) = transcription_manager.load_model(model_id) {

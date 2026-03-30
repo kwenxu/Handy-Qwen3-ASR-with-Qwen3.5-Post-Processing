@@ -333,8 +333,8 @@
         "descriptionUnsupported": "Translation is not supported by the {{model}} model."
       },
       "modelUnload": {
-        "title": "Unload Model",
-        "description": "Automatically free GPU/CPU memory when the model hasn't been used for the specified time",
+        "title": "Idle Release Model",
+        "description": "Automatically free GPU/CPU memory when the model hasn't been used for the specified time (release = unload)",
         "options": {
           "never": "Never",
           "immediately": "Immediately",
@@ -361,44 +361,72 @@
         "transcription": "Transcription Model Performance",
         "postProcessing": "Post-Processing Model Performance"
       },
+      "adaptiveIdle": {
+        "title": "Idle Release Strategy (Adaptive)",
+        "description": "Extends idle release windows during frequent usage to reduce hot/cold thrashing, then gradually falls back after long inactivity.",
+        "toggleLabel": "Enable adaptive release tiers",
+        "toggleDescription": "Adjusts release thresholds using recent usage tiers (30/60 min) to reduce repeated release-and-warmup cycles.",
+        "transcriptionHint": "Transcription model: adaptive extension is applied on top of the base idle-release timeout (about 30/60 min tiers).",
+        "postProcessHint": "Post-processing model: uses the same adaptive tiering and also unloads automatically when local post-processing is not active."
+      },
+      "keepWarm": {
+        "toggleLabel": "Enable periodic keep-alive",
+        "toggleDescription": "Within a recent activity window, periodically refreshes hot state to reduce cold starts. Disable to rely only on idle release.",
+        "paramsTitle": "Periodic Keep-Alive Parameters",
+        "paramsDescription": "Keep-alive only runs while usage is still considered recent. Outside the window, normal idle release applies.",
+        "interval": {
+          "label": "Keep-alive interval (sec)",
+          "hint": "How often to send a keep-alive heartbeat. Range: 60-3600."
+        },
+        "activeWindow": {
+          "label": "Recent activity window (min)",
+          "hint": "Keep-alive runs only if real usage happened within this window. Range: 5-240."
+        }
+      },
+      "preloadConflict": {
+        "title": "Preload vs Immediate Release",
+        "description": "You selected \"Immediately\" for release timeout, so startup preload is no longer meaningful and related controls are disabled.",
+        "transcriptionHint": "Transcription model: falls back to on-trigger load instead of startup residency.",
+        "postProcessHint": "Post-processing model: falls back to on-trigger warmup instead of startup residency."
+      },
       "qwenTranscription": {
         "title": "Qwen Transcription Runtime (2 models)",
         "description": "Runtime performance path for Qwen3-ASR-0.6B and 1.7B.",
-        "hint": "Prefers compatible system Python (>=3.11); falls back to bundled uv + .venv automatically."
+        "hint": "Prefers compatible system Python (>=3.11); falls back to bundled uv + .venv automatically. Python package index uses mirror-first fallback."
       },
       "whisperExperimental": "Whisper Acceleration (Experimental)",
       "qwenPanel": {
         "title": "Qwen Performance Panel",
         "strategy": {
-          "title": "Startup Preload Strategy",
-          "description": "Controls whether Qwen transcription and post-processing preloads run in parallel or serially on app startup.",
+          "title": "Startup Load Strategy",
+          "description": "Controls whether Qwen transcription and post-processing model loads run in parallel or serially on app startup.",
           "options": {
-            "parallel": "Parallel (faster)",
-            "serial": "Serial (smoother)"
+            "parallel": "Parallel load (faster)",
+            "serial": "Serial load (smoother)"
           }
         },
         "qwen3Preload": {
-          "label": "Preload Qwen3 transcription on startup",
-          "description": "When enabled, Handy preloads the currently selected Qwen3 transcription model on launch to reduce first-run latency."
+          "label": "Load Qwen3 transcription on startup",
+          "description": "When enabled, Handy loads the currently selected Qwen3 transcription model on launch to reduce first-run latency."
         },
         "qwen35Preload": {
-          "label": "Preload Qwen3.5 post-processing on startup",
+          "label": "Load Qwen3.5 post-processing on startup",
           "description": "When enabled, Handy preloads the selected local Qwen3.5 post-processing model at startup (local provider only)."
         },
         "qwen35Warmup": {
-          "label": "Run a short warmup inference after preload",
-          "description": "Performs a tiny warmup generation after loading the post-processing model to reduce first-request delay."
+          "label": "Run quick warmup after load",
+          "description": "Enabled by default. Runs one short warmup inference after each cold reload of the post-processing model to reduce first-request delay."
         },
         "startupTiming": {
-          "title": "Preload Timing",
-          "description": "Tune startup delay before preloading to avoid a CPU spike right after app launch.",
+          "title": "Load Timing",
+          "description": "Tune startup delay before loading to avoid a CPU spike right after app launch.",
           "qwen3Delay": {
-            "label": "Qwen3 preload delay (ms)",
-            "hint": "0 means immediate preload. Increase slightly to reduce startup stutter. Range: 0-15000."
+            "label": "Qwen3 load delay (ms)",
+            "hint": "0 means immediate load. Increase slightly to reduce startup stutter. Range: 0-15000."
           },
           "qwen35Delay": {
-            "label": "Qwen3.5 preload delay (ms)",
-            "hint": "0 means immediate preload. Increase to move post-processing load deeper into background startup. Range: 0-15000."
+            "label": "Qwen3.5 load delay (ms)",
+            "hint": "0 means immediate load. Increase to move post-processing load deeper into background startup. Range: 0-15000."
           }
         },
         "runtime": {
@@ -452,17 +480,19 @@
           "placeholder": "You are a strict transcription post-processor. Output final text only, no explanations, no <think> tags."
         },
         "localQuality": {
-          "title": "Local Quality Preset",
-          "description": "Control the tradeoff between speed and output quality for the local model.",
-          "balancedOnly": "This build uses a single stable 'Balanced' preset. Use the advanced controls below for fine tuning.",
+          "title": "Local Parameter Profile",
+          "description": "Use one of three preset profiles, or switch to Custom by editing any advanced parameter.",
+          "balancedOnly": "Preset profiles are available below. Any manual parameter edit will automatically switch to Custom.",
+          "customAutoHint": "Tip: changing any parameter below will auto-switch this profile to Custom.",
           "options": {
             "fast": "Fast",
             "balanced": "Balanced",
-            "quality": "Quality"
+            "quality": "Quality",
+            "custom": "Custom"
           }
         },
         "advancedLocal": {
-          "title": "Advanced Local Params (Geek)",
+          "title": "Advanced Local Params",
           "description": "Directly tune local post-processing generation parameters. Changes apply immediately after save.",
           "singlePresetNotice": "Only one local preset is kept in this build. Tune the parameters below directly.",
           "maxTokens": "max_tokens (64-512)",

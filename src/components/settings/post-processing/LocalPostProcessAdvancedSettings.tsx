@@ -1,12 +1,49 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { SettingContainer } from "@/components/ui";
+import { Dropdown, SettingContainer } from "@/components/ui";
 import { Input } from "../../ui/Input";
 import { useSettings } from "../../../hooks/useSettings";
 
 interface LocalPostProcessAdvancedSettingsProps {
   grouped?: boolean;
 }
+
+type LocalPresetKey = "fast" | "balanced" | "quality" | "custom";
+
+type LocalPresetValues = {
+  maxTokens: number;
+  temperature: number;
+  topP: number;
+  repetitionPenalty: number;
+  repetitionContextSize: number;
+};
+
+const LOCAL_PRESET_VALUES: Record<Exclude<LocalPresetKey, "custom">, LocalPresetValues> = {
+  fast: {
+    maxTokens: 128,
+    temperature: 0.0,
+    topP: 0.9,
+    repetitionPenalty: 1.08,
+    repetitionContextSize: 96,
+  },
+  balanced: {
+    maxTokens: 192,
+    temperature: 0.0,
+    topP: 1.0,
+    repetitionPenalty: 1.17,
+    repetitionContextSize: 128,
+  },
+  quality: {
+    maxTokens: 256,
+    temperature: 0.1,
+    topP: 1.0,
+    repetitionPenalty: 1.1,
+    repetitionContextSize: 160,
+  },
+};
+
+const closeEnough = (a: number, b: number, epsilon = 1e-6): boolean =>
+  Math.abs(a - b) <= epsilon;
 
 export const LocalPostProcessAdvancedSettings: React.FC<
   LocalPostProcessAdvancedSettingsProps
@@ -27,6 +64,11 @@ export const LocalPostProcessAdvancedSettings: React.FC<
   const currentLocalRepetitionContextSize = Number(
     getSetting("post_process_local_repetition_context_size") || 128,
   );
+  const currentLocalQuality = (
+    getSetting("post_process_quality") || "balanced"
+  )
+    .toString()
+    .toLowerCase() as LocalPresetKey;
 
   const [maxTokensDraft, setMaxTokensDraft] = useState(
     String(currentLocalMaxTokens),
@@ -41,6 +83,33 @@ export const LocalPostProcessAdvancedSettings: React.FC<
   const [repetitionContextSizeDraft, setRepetitionContextSizeDraft] = useState(
     String(currentLocalRepetitionContextSize),
   );
+
+  const matchesPreset = (preset: Exclude<LocalPresetKey, "custom">): boolean => {
+    const values = LOCAL_PRESET_VALUES[preset];
+    return (
+      currentLocalMaxTokens === values.maxTokens &&
+      closeEnough(currentLocalTemperature, values.temperature) &&
+      closeEnough(currentLocalTopP, values.topP) &&
+      closeEnough(currentLocalRepetitionPenalty, values.repetitionPenalty) &&
+      currentLocalRepetitionContextSize === values.repetitionContextSize
+    );
+  };
+
+  const displayQuality: LocalPresetKey =
+    currentLocalQuality === "fast" ||
+    currentLocalQuality === "balanced" ||
+    currentLocalQuality === "quality" ||
+    currentLocalQuality === "custom"
+      ? currentLocalQuality !== "custom" && !matchesPreset(currentLocalQuality)
+        ? "custom"
+        : currentLocalQuality
+      : "balanced";
+
+  useEffect(() => {
+    if (displayQuality === "custom" && currentLocalQuality !== "custom") {
+      void updateSetting("post_process_quality", "custom");
+    }
+  }, [displayQuality, currentLocalQuality, updateSetting]);
 
   useEffect(() => {
     setMaxTokensDraft(String(currentLocalMaxTokens));
@@ -65,12 +134,42 @@ export const LocalPostProcessAdvancedSettings: React.FC<
   const clamp = (value: number, min: number, max: number): number =>
     Math.min(max, Math.max(min, value));
 
+  const markCustom = () => {
+    if (displayQuality !== "custom") {
+      void updateSetting("post_process_quality", "custom");
+    }
+  };
+
+  const applyPreset = (preset: Exclude<LocalPresetKey, "custom">) => {
+    const values = LOCAL_PRESET_VALUES[preset];
+
+    setMaxTokensDraft(String(values.maxTokens));
+    setTemperatureDraft(String(values.temperature));
+    setTopPDraft(String(values.topP));
+    setRepetitionPenaltyDraft(String(values.repetitionPenalty));
+    setRepetitionContextSizeDraft(String(values.repetitionContextSize));
+
+    void updateSetting("post_process_quality", preset);
+    void updateSetting("post_process_local_max_tokens", values.maxTokens);
+    void updateSetting("post_process_local_temperature", values.temperature);
+    void updateSetting("post_process_local_top_p", values.topP);
+    void updateSetting(
+      "post_process_local_repetition_penalty",
+      values.repetitionPenalty,
+    );
+    void updateSetting(
+      "post_process_local_repetition_context_size",
+      values.repetitionContextSize,
+    );
+  };
+
   const saveIntegerSetting = (
     draft: string,
     fallback: number,
     min: number,
     max: number,
     onDraftReset: (v: string) => void,
+    onBeforeUpdate: () => void,
     onUpdate: (v: number) => void,
   ) => {
     const parsed = Number.parseInt(draft, 10);
@@ -80,7 +179,10 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     }
     const normalized = clamp(parsed, min, max);
     onDraftReset(String(normalized));
-    if (normalized !== fallback) onUpdate(normalized);
+    if (normalized !== fallback) {
+      onBeforeUpdate();
+      onUpdate(normalized);
+    }
   };
 
   const saveFloatSetting = (
@@ -90,6 +192,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     max: number,
     digits: number,
     onDraftReset: (v: string) => void,
+    onBeforeUpdate: () => void,
     onUpdate: (v: number) => void,
   ) => {
     const parsed = Number.parseFloat(draft);
@@ -100,7 +203,10 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     const normalized = clamp(parsed, min, max);
     const rounded = Number(normalized.toFixed(digits));
     onDraftReset(String(rounded));
-    if (rounded !== fallback) onUpdate(rounded);
+    if (rounded !== fallback) {
+      onBeforeUpdate();
+      onUpdate(rounded);
+    }
   };
 
   const updateIntegerRealtime = (
@@ -108,12 +214,16 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     current: number,
     min: number,
     max: number,
+    onBeforeUpdate: () => void,
     updater: (value: number) => void,
   ) => {
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed)) return;
     const normalized = clamp(parsed, min, max);
-    if (normalized !== current) updater(normalized);
+    if (normalized !== current) {
+      onBeforeUpdate();
+      updater(normalized);
+    }
   };
 
   const updateFloatRealtime = (
@@ -122,13 +232,17 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     min: number,
     max: number,
     digits: number,
+    onBeforeUpdate: () => void,
     updater: (value: number) => void,
   ) => {
     const parsed = Number.parseFloat(raw);
     if (!Number.isFinite(parsed)) return;
     const normalized = clamp(parsed, min, max);
     const rounded = Number(normalized.toFixed(digits));
-    if (rounded !== current) updater(rounded);
+    if (rounded !== current) {
+      onBeforeUpdate();
+      updater(rounded);
+    }
   };
 
   return (
@@ -139,9 +253,51 @@ export const LocalPostProcessAdvancedSettings: React.FC<
       layout="stacked"
       grouped={grouped}
     >
-      <p className="text-xs text-mid-gray">
-        {t("settings.postProcessing.api.advancedLocal.singlePresetNotice")}
-      </p>
+      <div className="space-y-1">
+        <label className="text-sm font-semibold text-text">
+          {t("settings.postProcessing.api.localQuality.title")}
+        </label>
+        <Dropdown
+          selectedValue={displayQuality}
+          options={[
+            {
+              value: "fast",
+              label: t("settings.postProcessing.api.localQuality.options.fast"),
+            },
+            {
+              value: "balanced",
+              label: t(
+                "settings.postProcessing.api.localQuality.options.balanced",
+              ),
+            },
+            {
+              value: "quality",
+              label: t(
+                "settings.postProcessing.api.localQuality.options.quality",
+              ),
+            },
+            {
+              value: "custom",
+              label: t("settings.postProcessing.api.localQuality.options.custom"),
+            },
+          ]}
+          onSelect={(value) => {
+            if (!value) return;
+            if (value === "custom") {
+              void updateSetting("post_process_quality", "custom");
+              return;
+            }
+            if (value === "fast" || value === "balanced" || value === "quality") {
+              applyPreset(value);
+            }
+          }}
+          className="w-[240px]"
+          disabled={isUpdating("post_process_quality")}
+        />
+        <p className="text-xs text-mid-gray/70">
+          {t("settings.postProcessing.api.localQuality.customAutoHint")}
+        </p>
+      </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="space-y-1">
           <label className="text-sm font-semibold text-text">
@@ -161,6 +317,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 currentLocalMaxTokens,
                 64,
                 512,
+                markCustom,
                 (v) => void updateSetting("post_process_local_max_tokens", v),
               );
             }}
@@ -171,6 +328,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 64,
                 512,
                 setMaxTokensDraft,
+                markCustom,
                 (v) => void updateSetting("post_process_local_max_tokens", v),
               )
             }
@@ -201,6 +359,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 0,
                 1,
                 2,
+                markCustom,
                 (v) => void updateSetting("post_process_local_temperature", v),
               );
             }}
@@ -212,6 +371,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 1,
                 2,
                 setTemperatureDraft,
+                markCustom,
                 (v) => void updateSetting("post_process_local_temperature", v),
               )
             }
@@ -242,6 +402,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 0.1,
                 1,
                 2,
+                markCustom,
                 (v) => void updateSetting("post_process_local_top_p", v),
               );
             }}
@@ -253,6 +414,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 1,
                 2,
                 setTopPDraft,
+                markCustom,
                 (v) => void updateSetting("post_process_local_top_p", v),
               )
             }
@@ -283,6 +445,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 1,
                 1.5,
                 2,
+                markCustom,
                 (v) =>
                   void updateSetting(
                     "post_process_local_repetition_penalty",
@@ -298,6 +461,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 1.5,
                 2,
                 setRepetitionPenaltyDraft,
+                markCustom,
                 (v) =>
                   void updateSetting(
                     "post_process_local_repetition_penalty",
@@ -335,6 +499,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 currentLocalRepetitionContextSize,
                 32,
                 256,
+                markCustom,
                 (v) =>
                   void updateSetting(
                     "post_process_local_repetition_context_size",
@@ -349,6 +514,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 32,
                 256,
                 setRepetitionContextSizeDraft,
+                markCustom,
                 (v) =>
                   void updateSetting(
                     "post_process_local_repetition_context_size",

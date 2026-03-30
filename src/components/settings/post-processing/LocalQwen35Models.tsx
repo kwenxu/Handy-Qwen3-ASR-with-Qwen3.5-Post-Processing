@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Download, Loader2, RefreshCcw, Trash2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 import { SettingContainer } from "../../ui";
@@ -34,6 +35,7 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
   description = "Download and switch local Qwen3.5 models for offline post-processing.",
   grouped = true,
 }) => {
+  const { t } = useTranslation();
   const [models, setModels] = useState<LocalPostProcessModelInfo[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [busyModelIds, setBusyModelIds] = useState<Record<string, boolean>>({});
@@ -119,7 +121,18 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
   };
 
   const sortedModels = useMemo(() => {
+    const preferredOrder: Record<string, number> = {
+      "qwen35-optiq-0.8b": 0,
+      "qwen35-optiq-2b": 1,
+      "qwen35-optiq-4b": 2,
+      "qwen35-optiq-9b": 3,
+    };
     return [...models].sort((a, b) => {
+      const aOrder = preferredOrder[a.id] ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = preferredOrder[b.id] ?? Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
       if (a.is_recommended !== b.is_recommended) {
         return a.is_recommended ? -1 : 1;
       }
@@ -141,7 +154,7 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
         <ResetButton
           onClick={refreshModels}
           disabled={isLoadingModels}
-          ariaLabel="Refresh local models"
+          ariaLabel={t("settings.postProcessing.api.model.refreshModels")}
           className="flex h-10 w-10 items-center justify-center"
         >
           <RefreshCcw
@@ -176,12 +189,12 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
                     <p className="text-sm font-semibold">{model.name}</p>
                     {model.is_recommended && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">
-                        Recommended
+                        {t("onboarding.recommended")}
                       </span>
                     )}
                     {model.is_experimental && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-700">
-                        Experimental
+                        {t("settings.advanced.groups.experimental")}
                       </span>
                     )}
                   </div>
@@ -212,10 +225,10 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
                         size="md"
                         disabled={isBusy}
                       >
-                        Cancel
+                        {t("modelSelector.cancel")}
                       </Button>
                       <span className="text-xs text-mid-gray">
-                        Downloading…
+                        {t("onboarding.downloading")}
                       </span>
                     </>
                   ) : model.is_downloaded ? (
@@ -229,10 +242,10 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
                         {isSelected ? (
                           <span className="inline-flex items-center gap-1">
                             <Check className="h-4 w-4" />
-                            Active
+                            {t("modelSelector.active")}
                           </span>
                         ) : (
-                          "Use"
+                          t("common.open")
                         )}
                       </Button>
                       <Button
@@ -243,7 +256,7 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
                       >
                         <span className="inline-flex items-center gap-1">
                           <Trash2 className="h-4 w-4" />
-                          Delete
+                          {t("common.delete")}
                         </span>
                       </Button>
                     </>
@@ -260,7 +273,7 @@ export const LocalQwen35Models: React.FC<LocalQwen35ModelsProps> = ({
                         ) : (
                           <Download className="h-4 w-4" />
                         )}
-                        Download
+                        {t("onboarding.download")}
                       </span>
                     </Button>
                   )}

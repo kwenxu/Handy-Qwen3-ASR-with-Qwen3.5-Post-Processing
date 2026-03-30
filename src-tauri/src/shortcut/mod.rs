@@ -16,9 +16,12 @@ mod tauri_impl;
 use log::{error, info, warn};
 use serde::Serialize;
 use specta::Type;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::managers::post_process_model::PostProcessModelManager;
+use crate::managers::qwen35_post_manager::Qwen35PostManager;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
@@ -328,6 +331,53 @@ pub fn get_keyboard_implementation(app: AppHandle) -> String {
 // ============================================================================
 // Validation Helpers
 // ============================================================================
+
+pub(crate) fn schedule_active_local_post_process_preload(app: &AppHandle, reason: &str) {
+    let runtime_settings = settings::get_settings(app);
+    if !runtime_settings.post_process_enabled
+        || runtime_settings.post_process_provider_id != LOCAL_QWEN35_PROVIDER_ID
+    {
+        return;
+    }
+
+    let selected_model = runtime_settings
+        .post_process_models
+        .get(LOCAL_QWEN35_PROVIDER_ID)
+        .cloned()
+        .unwrap_or_default();
+    if selected_model.trim().is_empty() {
+        return;
+    }
+
+    let post_model_manager = app.state::<Arc<PostProcessModelManager>>();
+    if !post_model_manager.check_model_cached(&selected_model) {
+        return;
+    }
+
+    let app_handle = app.clone();
+    let model_id = selected_model;
+    let reason_text = reason.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(manager_state) = app_handle.try_state::<Arc<Qwen35PostManager>>() {
+            let manager = manager_state.inner().clone();
+            info!(
+                "Scheduling active local Qwen3.5 preload (reason={}, model={})",
+                reason_text, model_id
+            );
+            if let Err(err) = manager.preload_model(&model_id) {
+                warn!(
+                    "Active local Qwen3.5 preload failed (reason={}, model={}): {}",
+                    reason_text, model_id, err
+                );
+            }
+        } else {
+            warn!(
+                "Qwen35PostManager unavailable; cannot preload active local model {}",
+                model_id
+            );
+        }
+    });
+}
 
 /// Validate a shortcut for a specific implementation
 fn validate_shortcut_for_implementation(
@@ -812,6 +862,10 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
         }
     }
 
+    if enabled {
+        schedule_active_local_post_process_preload(&app, "post_process_enabled");
+    }
+
     Ok(())
 }
 
@@ -839,9 +893,10 @@ pub fn change_post_process_quality_setting(app: AppHandle, quality: String) -> R
     settings.post_process_quality = match normalized.as_str() {
         "fast" => "fast".to_string(),
         "quality" => "quality".to_string(),
+        "custom" => "custom".to_string(),
         "" | "balanced" => "balanced".to_string(),
         _ => {
-            return Err("Quality must be one of: fast, balanced, quality".to_string());
+            return Err("Quality must be one of: fast, balanced, quality, custom".to_string());
         }
     };
     settings::write_settings(&app, settings);
@@ -1111,6 +1166,7 @@ pub fn change_post_process_model_setting(
     validate_provider_exists(&settings, &provider_id)?;
     settings.post_process_models.insert(provider_id, model);
     settings::write_settings(&app, settings);
+    schedule_active_local_post_process_preload(&app, "model_changed");
     Ok(())
 }
 
@@ -1121,6 +1177,7 @@ pub fn set_post_process_provider(app: AppHandle, provider_id: String) -> Result<
     validate_provider_exists(&settings, &provider_id)?;
     settings.post_process_provider_id = provider_id;
     settings::write_settings(&app, settings);
+    schedule_active_local_post_process_preload(&app, "provider_changed");
     Ok(())
 }
 
@@ -1220,8 +1277,8 @@ pub async fn fetch_post_process_models(
             .state::<std::sync::Arc<crate::managers::post_process_model::PostProcessModelManager>>(
             );
         let mut ids = manager.get_model_ids();
-        // Keep a stable UX order by moving default balance model to front.
-        if let Some(pos) = ids.iter().position(|id| id == "qwen35-optiq-2b") {
+        // Keep a stable UX order by moving default local model to front.
+        if let Some(pos) = ids.iter().position(|id| id == "qwen35-optiq-0.8b") {
             let default_id = ids.remove(pos);
             ids.insert(0, default_id);
         }

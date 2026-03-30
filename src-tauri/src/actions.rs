@@ -113,6 +113,214 @@ fn clean_post_process_output(s: &str) -> String {
     out.trim().to_string()
 }
 
+fn template_requests_arabic_digits(prompt_template: &str) -> bool {
+    let lowered = prompt_template.to_ascii_lowercase();
+    lowered.contains("arabic digit")
+        || lowered.contains("arabic numeral")
+        || lowered.contains("arabic number")
+        || lowered.contains("1234567")
+        || prompt_template.contains("阿拉伯数字")
+}
+
+fn is_chinese_digit_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '零' | '〇'
+            | '○'
+            | '幺'
+            | '壹'
+            | '一'
+            | '贰'
+            | '二'
+            | '两'
+            | '叁'
+            | '三'
+            | '肆'
+            | '四'
+            | '伍'
+            | '五'
+            | '陆'
+            | '六'
+            | '柒'
+            | '七'
+            | '捌'
+            | '八'
+            | '玖'
+            | '九'
+    )
+}
+
+fn chinese_digit_to_arabic(ch: char) -> Option<char> {
+    match ch {
+        '零' | '〇' | '○' => Some('0'),
+        '幺' | '壹' | '一' => Some('1'),
+        '贰' | '二' => Some('2'),
+        '两' => Some('2'),
+        '叁' | '三' => Some('3'),
+        '肆' | '四' => Some('4'),
+        '伍' | '五' => Some('5'),
+        '陆' | '六' => Some('6'),
+        '柒' | '七' => Some('7'),
+        '捌' | '八' => Some('8'),
+        '玖' | '九' => Some('9'),
+        _ => None,
+    }
+}
+
+fn is_cjk_non_digit_char(ch: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&ch) && !is_chinese_digit_char(ch)
+}
+
+fn is_list_separator_char(ch: char) -> bool {
+    matches!(ch, '、' | ',' | '，' | ';' | '；' | ':' | '：' | '/' | '／')
+}
+
+fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
+    fn parse_digit_char(ch: char) -> Option<char> {
+        if ch.is_ascii_digit() {
+            Some(ch)
+        } else {
+            chinese_digit_to_arabic(ch)
+        }
+    }
+
+    fn is_b_unit(ch: char) -> bool {
+        matches!(ch, 'B' | 'b')
+    }
+
+    fn skip_spaces(chars: &[char], mut idx: usize) -> usize {
+        while idx < chars.len() && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        idx
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if let Some(int_digit) = parse_digit_char(chars[i]) {
+            let mut j = skip_spaces(&chars, i + 1);
+            let mut handled = false;
+
+            // decimal form, e.g. 零点8B / 零点八 B / 0.8B / 一点七B
+            if j < chars.len() && matches!(chars[j], '点' | '.' | '．') {
+                j = skip_spaces(&chars, j + 1);
+                if j < chars.len() {
+                    if let Some(frac_digit) = parse_digit_char(chars[j]) {
+                        let k = skip_spaces(&chars, j + 1);
+                        if k < chars.len() && is_b_unit(chars[k]) {
+                            out.push(int_digit);
+                            out.push('.');
+                            out.push(frac_digit);
+                            out.push('B');
+                            i = k + 1;
+                            handled = true;
+                        }
+                    }
+                }
+            }
+
+            if handled {
+                continue;
+            }
+
+            // integer form, e.g. 两B / 2 B / 二 B / 9b
+            let k = skip_spaces(&chars, i + 1);
+            if k < chars.len() && is_b_unit(chars[k]) {
+                out.push(int_digit);
+                out.push('B');
+                i = k + 1;
+                continue;
+            }
+        }
+
+        out.push(chars[i]);
+        i += 1;
+    }
+
+    out
+}
+
+fn normalize_standalone_chinese_digits_to_arabic(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if !is_chinese_digit_char(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        while i < chars.len() && is_chinese_digit_char(chars[i]) {
+            i += 1;
+        }
+        let end = i;
+        let seq_len = end - start;
+
+        let prev = if start > 0 {
+            chars.get(start - 1).copied()
+        } else {
+            None
+        };
+        let mut prev_non_ws = None;
+        let mut k = start;
+        while k > 0 {
+            let ch = chars[k - 1];
+            if !ch.is_whitespace() {
+                prev_non_ws = Some(ch);
+                break;
+            }
+            k -= 1;
+        }
+
+        let next = chars.get(end).copied();
+        let mut next_non_ws = None;
+        let mut j = end;
+        while j < chars.len() {
+            let ch = chars[j];
+            if !ch.is_whitespace() {
+                next_non_ws = Some(ch);
+                break;
+            }
+            j += 1;
+        }
+
+        // Boundary guard:
+        // - Convert multi-digit sequences eagerly (e.g. 一二三 -> 123).
+        // - For single digits, avoid in-word conversion (e.g. 一些 must stay semantic).
+        // - Convert single-digit list items (e.g. 一、二、三、四).
+        let prev_is_cjk = prev.is_some_and(is_cjk_non_digit_char);
+        let next_is_cjk = next.is_some_and(is_cjk_non_digit_char);
+        let should_convert = if seq_len >= 2 {
+            true
+        } else if prev_is_cjk && next_is_cjk {
+            false
+        } else {
+            prev.is_some_and(is_list_separator_char)
+                || next.is_some_and(is_list_separator_char)
+                || prev_non_ws.is_some_and(is_list_separator_char)
+                || next_non_ws.is_some_and(|ch| ch.is_ascii_alphanumeric())
+        };
+
+        if should_convert {
+            for ch in &chars[start..end] {
+                out.push(chinese_digit_to_arabic(*ch).unwrap_or(*ch));
+            }
+        } else {
+            for ch in &chars[start..end] {
+                out.push(*ch);
+            }
+        }
+    }
+
+    normalize_model_size_tokens_with_b_unit(&out)
+}
+
 fn build_user_prompt_content(prompt_template: &str, transcription: &str) -> String {
     if prompt_template.contains("${output}") {
         prompt_template.replace("${output}", transcription)
@@ -138,15 +346,169 @@ fn has_meaningful_text(input: &str) -> bool {
     informative_chars >= 1
 }
 
-fn reject_post_output_reason(output: &str) -> Option<&'static str> {
+fn trim_rule_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    let mut consumed = 0usize;
+    let mut saw_digit = false;
+    for (idx, ch) in trimmed.char_indices() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            consumed = idx + ch.len_utf8();
+            continue;
+        }
+        if saw_digit && matches!(ch, '.' | '、' | ')' | '）' | ':') {
+            consumed = idx + ch.len_utf8();
+            continue;
+        }
+        if consumed > 0 && ch.is_whitespace() {
+            consumed = idx + ch.len_utf8();
+            continue;
+        }
+        break;
+    }
+    if consumed > 0 {
+        trimmed[consumed..].trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn extract_template_rule_keys(prompt_template: &str) -> Vec<String> {
+    prompt_template
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.contains("${output}"))
+        .filter(|line| {
+            !matches!(
+                *line,
+                "Input:"
+                    | "输入："
+                    | "输入:"
+                    | "Transcript:"
+                    | "Rules:"
+                    | "规则："
+                    | "规则:"
+                    | "要求："
+                    | "要求:"
+                    | "Task:"
+                    | "任务："
+            )
+        })
+        .map(trim_rule_prefix)
+        .map(normalize_for_compare)
+        .filter(|key| key.len() >= 6)
+        .collect()
+}
+
+fn looks_like_instruction_template_line(line: &str, template_keys: &[String]) -> bool {
+    let normalized = normalize_for_compare(trim_rule_prefix(line));
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let line_lower = line.trim().to_ascii_lowercase();
+    let hard_markers = [
+        "output contract",
+        "rules:",
+        "task:",
+        "do not include reasoning",
+        "return only the final",
+    ];
+    if hard_markers
+        .iter()
+        .any(|marker| line_lower.contains(marker))
+    {
+        return true;
+    }
+
+    let hard_markers_zh = [
+        "保持原意与事实",
+        "去除口头重复",
+        "专有名词",
+        "仅输出最终结果",
+        "不要解释",
+        "中文输出阿拉伯数字",
+    ];
+    if hard_markers_zh.iter().any(|marker| line.contains(marker)) {
+        return true;
+    }
+
+    template_keys.iter().any(|key| {
+        normalized.contains(key)
+            || key.contains(&normalized)
+            || prefix_chars_equal(&normalized, key, 8)
+    })
+}
+
+fn prefix_chars_equal(a: &str, b: &str, n: usize) -> bool {
+    a.chars().take(n).eq(b.chars().take(n))
+}
+
+fn strip_prompt_template_leakage(output: &str, prompt_template: &str) -> String {
+    let template_keys = extract_template_rule_keys(prompt_template);
+    let mut kept_lines = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if looks_like_instruction_template_line(trimmed, &template_keys) {
+            continue;
+        }
+        kept_lines.push(trimmed.to_string());
+    }
+
+    if kept_lines.is_empty() {
+        String::new()
+    } else {
+        kept_lines.join("\n")
+    }
+}
+
+fn normalize_post_process_candidate(
+    raw_output: &str,
+    prompt_template: &str,
+    force_arabic_digits: bool,
+) -> String {
+    let mut cleaned = clean_post_process_output(raw_output);
+    cleaned = strip_prompt_template_leakage(&cleaned, prompt_template);
+    cleaned = collapse_repeated_lines(&cleaned);
+    if force_arabic_digits {
+        cleaned = normalize_standalone_chinese_digits_to_arabic(&cleaned);
+    }
+    cleaned.trim().to_string()
+}
+
+fn reject_post_output_reason(output: &str, prompt_template: &str) -> Option<&'static str> {
     if output.trim().is_empty() {
         return Some("empty");
+    }
+    if output.contains("${output}") {
+        return Some("prompt_placeholder_leakage");
+    }
+    let template_keys = extract_template_rule_keys(prompt_template);
+    let mut suspicious_lines = 0usize;
+    let mut total_non_empty = 0usize;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        total_non_empty += 1;
+        if looks_like_instruction_template_line(trimmed, &template_keys) {
+            suspicious_lines += 1;
+        }
+    }
+    if suspicious_lines >= 2 && suspicious_lines * 2 >= total_non_empty {
+        return Some("prompt_template_leakage");
     }
     None
 }
 
-fn should_reject_post_output(output: &str) -> bool {
-    reject_post_output_reason(output).is_some()
+fn should_reject_post_output(output: &str, prompt_template: &str) -> bool {
+    reject_post_output_reason(output, prompt_template).is_some()
 }
 
 #[derive(Clone, Copy)]
@@ -236,6 +598,8 @@ async fn post_process_transcription(
 
     let system_prompt = settings.post_process_system_prompt.trim().to_string();
     let quality_params = local_generation_params_from_settings(settings);
+    let force_arabic_digits = template_requests_arabic_digits(&prompt);
+    let prompt_template_for_post = prompt.clone();
 
     if provider.id == LOCAL_QWEN35_PROVIDER_ID {
         let manager = app.state::<Arc<Qwen35PostManager>>().inner().clone();
@@ -246,6 +610,8 @@ async fn post_process_transcription(
         let local_template_id = selected_prompt_id.clone();
         let local_quality = quality_params;
         let local_system_prompt = system_prompt.clone();
+        let local_force_arabic_digits = force_arabic_digits;
+        let local_prompt_template = prompt_template_for_post.clone();
 
         return match tauri::async_runtime::spawn_blocking(move || {
             debug!(
@@ -269,12 +635,16 @@ async fn post_process_transcription(
                 local_quality.repetition_context_size,
             )?;
 
-            let first_clean = clean_post_process_output(&first);
+            let first_clean = normalize_post_process_candidate(
+                &first,
+                &local_prompt_template,
+                local_force_arabic_digits,
+            );
 
-            if !should_reject_post_output(&first_clean) {
+            if !should_reject_post_output(&first_clean, &local_prompt_template) {
                 return Ok(first_clean);
             }
-            if let Some(reason) = reject_post_output_reason(&first_clean) {
+            if let Some(reason) = reject_post_output_reason(&first_clean, &local_prompt_template) {
                 warn!(
                     "Local Qwen3.5 first pass rejected (reason={}, template_id={})",
                     reason, local_template_id
@@ -354,7 +724,11 @@ async fn post_process_transcription(
                             debug!("Apple Intelligence returned an empty response");
                             None
                         } else {
-                            let result = clean_post_process_output(&result);
+                            let result = normalize_post_process_candidate(
+                                &result,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
                             debug!(
                                 "Apple Intelligence post-processing succeeded. Output length: {} chars",
                                 result.len()
@@ -406,8 +780,12 @@ async fn post_process_transcription(
                         if let Some(transcription_value) =
                             json.get(TRANSCRIPTION_FIELD).and_then(|t| t.as_str())
                         {
-                            let result = clean_post_process_output(transcription_value);
-                            if should_reject_post_output(&result) {
+                            let result = normalize_post_process_candidate(
+                                transcription_value,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
+                            if should_reject_post_output(&result, &prompt_template_for_post) {
                                 warn!("Structured post-processing output rejected by validators");
                                 return None;
                             }
@@ -419,8 +797,12 @@ async fn post_process_transcription(
                             return Some(result);
                         } else {
                             error!("Structured output response missing 'transcription' field");
-                            let cleaned = clean_post_process_output(&content);
-                            if should_reject_post_output(&cleaned) {
+                            let cleaned = normalize_post_process_candidate(
+                                &content,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
+                            if should_reject_post_output(&cleaned, &prompt_template_for_post) {
                                 warn!("Structured raw content rejected by validators");
                                 return None;
                             }
@@ -432,8 +814,12 @@ async fn post_process_transcription(
                             "Failed to parse structured output JSON: {}. Returning raw content.",
                             e
                         );
-                        let cleaned = clean_post_process_output(&content);
-                        if should_reject_post_output(&cleaned) {
+                        let cleaned = normalize_post_process_candidate(
+                            &content,
+                            &prompt_template_for_post,
+                            force_arabic_digits,
+                        );
+                        if should_reject_post_output(&cleaned, &prompt_template_for_post) {
                             warn!("Structured fallback content rejected by validators");
                             return None;
                         }
@@ -468,8 +854,12 @@ async fn post_process_transcription(
     .await
     {
         Ok(Some(content)) => {
-            let content = clean_post_process_output(&content);
-            if should_reject_post_output(&content) {
+            let content = normalize_post_process_candidate(
+                &content,
+                &prompt_template_for_post,
+                force_arabic_digits,
+            );
+            if should_reject_post_output(&content, &prompt_template_for_post) {
                 warn!("Legacy post-processing output rejected by validators");
                 return None;
             }
@@ -594,6 +984,10 @@ impl ShortcutAction for TranscribeAction {
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.initiate_model_load();
+        if self.post_process {
+            // Fallback trigger preload: if local post model is not hot, start warming now.
+            shortcut::schedule_active_local_post_process_preload(app, "shortcut_start");
+        }
 
         let binding_id = binding_id.to_string();
         change_tray_icon(app, TrayIconState::Recording);
@@ -909,3 +1303,51 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map
 });
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_post_process_candidate, normalize_standalone_chinese_digits_to_arabic,
+        template_requests_arabic_digits,
+    };
+
+    #[test]
+    fn template_detects_arabic_digit_intent() {
+        assert!(template_requests_arabic_digits(
+            "Convert standalone Chinese numerals to Arabic digits.",
+        ));
+        assert!(template_requests_arabic_digits("请转换为阿拉伯数字。"));
+        assert!(!template_requests_arabic_digits(
+            "Translate transcript into concise English.",
+        ));
+    }
+
+    #[test]
+    fn converts_standalone_chinese_digit_sequences() {
+        let input = "一二三四五六七。阿拉伯数字的一、二、三、四。";
+        let output = normalize_standalone_chinese_digits_to_arabic(input);
+        assert_eq!(output, "1234567。阿拉伯数字的1、2、3、4。");
+    }
+
+    #[test]
+    fn keeps_in_word_boundaries_safe() {
+        let input = "一些人说一二三很好。";
+        let output = normalize_standalone_chinese_digits_to_arabic(input);
+        assert_eq!(output, "一些人说123很好。");
+    }
+
+    #[test]
+    fn converts_model_size_tokens_with_b_unit() {
+        let input = "零点8 B、零点八B、两 B、幺234、4 B、9 B。";
+        let output = normalize_standalone_chinese_digits_to_arabic(input);
+        assert_eq!(output, "0.8B、0.8B、2B、1234、4B、9B。");
+    }
+
+    #[test]
+    fn strips_template_instruction_leakage_lines() {
+        let prompt = "要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音。\n3. 专有名词保持原样。\n4. 内容是多点信息时用 Markdown 列表整理。\n5. 仅输出最终结果，不要解释。";
+        let raw = "1. 保持原意与事实：请提供关于“两个东西”的具体信息。\n2. 去除口头重复、语气词和明显噪音：简化表达。\n请帮我看看这两个东西是什么。";
+        let output = normalize_post_process_candidate(raw, prompt, false);
+        assert_eq!(output, "请帮我看看这两个东西是什么。");
+    }
+}

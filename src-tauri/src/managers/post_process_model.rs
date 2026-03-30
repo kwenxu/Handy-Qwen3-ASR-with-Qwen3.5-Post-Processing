@@ -1,6 +1,7 @@
 use crate::managers::qwen35_post_engine::{
     get_qwen35_python_command, init_qwen35_python_path, QWEN35_DEFAULT_ENDPOINT,
 };
+use crate::managers::qwen35_post_manager::Qwen35PostManager;
 use crate::settings::{get_settings, write_settings};
 use anyhow::Result;
 use log::{info, warn};
@@ -17,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 const LOCAL_PROVIDER_ID: &str = "local-qwen35";
-const DEFAULT_LOCAL_MODEL_ID: &str = "qwen35-optiq-2b";
+const DEFAULT_LOCAL_MODEL_ID: &str = "qwen35-optiq-0.8b";
 const QWEN35_FALLBACK_ENDPOINT: &str = "https://huggingface.co";
 const DEFAULT_PYPI_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const FALLBACK_PYPI_INDEX_URL: &str = "https://pypi.org/simple";
@@ -237,7 +238,7 @@ impl PostProcessModelManager {
                 repo_id: "mlx-community/Qwen3.5-0.8B-OptiQ-4bit".to_string(),
                 size_mb: 620,
                 tier: "Fast".to_string(),
-                is_recommended: false,
+                is_recommended: true,
                 is_experimental: false,
                 is_downloaded: false,
                 is_downloading: false,
@@ -253,7 +254,7 @@ impl PostProcessModelManager {
                 repo_id: "mlx-community/Qwen3.5-2B-OptiQ-4bit".to_string(),
                 size_mb: 1452,
                 tier: "Balance".to_string(),
-                is_recommended: true,
+                is_recommended: false,
                 is_experimental: false,
                 is_downloaded: false,
                 is_downloading: false,
@@ -804,7 +805,49 @@ impl PostProcessModelManager {
         let _ = self
             .app_handle
             .emit("post-process-model-download-complete", model_id.to_string());
+        self.maybe_preload_after_download(model_id);
         Ok(())
+    }
+
+    fn maybe_preload_after_download(&self, model_id: &str) {
+        let settings = get_settings(&self.app_handle);
+        if !settings.post_process_enabled || settings.post_process_provider_id != LOCAL_PROVIDER_ID
+        {
+            return;
+        }
+
+        let selected_model = settings
+            .post_process_models
+            .get(LOCAL_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_default();
+        if selected_model != model_id {
+            return;
+        }
+
+        let app_handle = self.app_handle.clone();
+        let model_id = model_id.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(manager_state) = app_handle.try_state::<Arc<Qwen35PostManager>>() {
+                let manager = manager_state.inner().clone();
+                if let Err(err) = manager.preload_model(&model_id) {
+                    warn!(
+                        "Post-download preload for local Qwen3.5 model '{}' failed (non-fatal): {}",
+                        model_id, err
+                    );
+                } else {
+                    info!(
+                        "Post-download preload for local Qwen3.5 model '{}' completed",
+                        model_id
+                    );
+                }
+            } else {
+                warn!(
+                    "Qwen35PostManager state unavailable; skipping post-download preload for '{}'",
+                    model_id
+                );
+            }
+        });
     }
 
     pub fn delete_model(&self, model_id: &str) -> Result<()> {

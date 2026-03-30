@@ -3,14 +3,17 @@ use crate::managers::qwen35_post_engine::Qwen35PostEngine;
 use crate::settings::get_settings;
 use anyhow::Result;
 use log::{info, warn};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use tauri::AppHandle;
 
 pub struct Qwen35PostManager {
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     model_manager: Arc<PostProcessModelManager>,
     engine: Mutex<Option<Qwen35PostEngine>>,
     current_model_id: Mutex<Option<String>>,
+    last_activity: AtomicU64,
 }
 
 impl Qwen35PostManager {
@@ -19,29 +22,27 @@ impl Qwen35PostManager {
         model_manager: Arc<PostProcessModelManager>,
     ) -> Result<Self> {
         Ok(Self {
-            _app_handle: app_handle.clone(),
+            app_handle: app_handle.clone(),
             model_manager,
             engine: Mutex::new(None),
             current_model_id: Mutex::new(None),
+            last_activity: AtomicU64::new(Self::now_ms()),
         })
     }
 
-    pub fn unload_model(&self) {
-        let mut engine_guard = self.engine.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(engine) = engine_guard.as_mut() {
-            engine.unload_model();
-        }
-        *engine_guard = None;
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
 
-        let mut current_guard = self
-            .current_model_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        *current_guard = None;
+    fn touch_activity(&self) {
+        self.last_activity.store(Self::now_ms(), Ordering::Relaxed);
     }
 
     pub fn preload_model(&self, model_id: &str) -> Result<()> {
-        let runtime_settings = get_settings(&self._app_handle);
+        let runtime_settings = get_settings(&self.app_handle);
 
         if !self.model_manager.check_model_cached(model_id) {
             return Err(anyhow::anyhow!(
@@ -60,6 +61,7 @@ impl Qwen35PostManager {
             .unwrap_or_else(|e| e.into_inner());
 
         if engine_guard.is_some() && current_guard.as_deref() == Some(model_id) {
+            self.touch_activity();
             return Ok(());
         }
 
@@ -77,7 +79,6 @@ impl Qwen35PostManager {
             .load_model(model_id, &model_dir)
             .map_err(|e| anyhow::anyhow!("Failed to preload local Qwen3.5 model: {}", e))?;
 
-        // One short warmup pass to reduce first real-call latency.
         if runtime_settings.qwen35_warmup_enabled {
             if let Err(err) = engine.process_text(
                 "Translate this to English: 你好",
@@ -95,6 +96,7 @@ impl Qwen35PostManager {
 
         *engine_guard = Some(engine);
         *current_guard = Some(model_id.to_string());
+        self.touch_activity();
         info!("Preloaded local Qwen3.5 post-process model: {}", model_id);
         Ok(())
     }
@@ -111,7 +113,8 @@ impl Qwen35PostManager {
         repetition_penalty: f32,
         repetition_context_size: usize,
     ) -> Result<String> {
-        let runtime_settings = get_settings(&self._app_handle);
+        let runtime_settings = get_settings(&self.app_handle);
+        self.touch_activity();
 
         if !self.model_manager.check_model_cached(model_id) {
             return Err(anyhow::anyhow!(
@@ -153,6 +156,25 @@ impl Qwen35PostManager {
                 .load_model(model_id, &model_dir)
                 .map_err(|e| anyhow::anyhow!("Failed to load local Qwen3.5 model: {}", e))?;
 
+            // Every cold reload runs one short warmup pass by default (toggle-controlled).
+            if runtime_settings.qwen35_warmup_enabled {
+                if let Err(err) = engine.process_text(
+                    "Translate this to English: 你好",
+                    "You are a strict transcription post-processor. Output final text only.",
+                    Some("warmup"),
+                    12,
+                    0.0,
+                    1.0,
+                    1.1,
+                    64,
+                ) {
+                    warn!(
+                        "Local Qwen3.5 warmup after reload failed (non-fatal): {}",
+                        err
+                    );
+                }
+            }
+
             *engine_guard = Some(engine);
             *current_guard = Some(model_id.to_string());
             info!("Loaded local Qwen3.5 post-process model: {}", model_id);
@@ -181,6 +203,9 @@ impl Qwen35PostManager {
             ));
         }
 
+        drop(current_guard);
+        drop(engine_guard);
+        self.touch_activity();
         Ok(result)
     }
 }

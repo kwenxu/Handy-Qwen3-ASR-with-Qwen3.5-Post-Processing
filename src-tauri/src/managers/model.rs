@@ -1634,7 +1634,10 @@ impl ModelManager {
         let mut sync_ok = false;
         let mut sync_errors = Vec::new();
         for index_url in &index_candidates {
-            info!("Running uv sync for Qwen3 runtime using index {}", index_url);
+            info!(
+                "Running uv sync for Qwen3 runtime using index {}",
+                index_url
+            );
             let mut sync_cmd = std::process::Command::new(&uv_bin);
             apply_uv_runtime_env_with_index(&mut sync_cmd, index_url);
             let sync_status = sync_cmd
@@ -1785,10 +1788,7 @@ impl ModelManager {
         }
 
         scored.sort_by_key(|(_, latency)| *latency);
-        let mut ranked: Vec<String> = scored
-            .into_iter()
-            .map(|(endpoint, _)| endpoint)
-            .collect();
+        let mut ranked: Vec<String> = scored.into_iter().map(|(endpoint, _)| endpoint).collect();
         ranked.extend(unscored);
         ranked
     }

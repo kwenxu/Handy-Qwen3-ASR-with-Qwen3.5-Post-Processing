@@ -1,20 +1,17 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
-use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
 use crate::managers::qwen3_engine::{init_qwen3_python_path, Qwen3Engine, Qwen3InferenceParams};
-use crate::settings::{
-    get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
-};
+use crate::settings::{get_settings, OrtAcceleratorSetting, WhisperAcceleratorSetting};
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use specta::Type;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime};
-use tauri::{AppHandle, Emitter, Manager};
+use std::time::SystemTime;
+use tauri::{AppHandle, Emitter};
 use transcribe_rs::{
     onnx::{
         canary::CanaryModel,
@@ -69,96 +66,22 @@ pub struct TranscriptionManager {
     app_handle: AppHandle,
     current_model_id: Arc<Mutex<Option<String>>>,
     last_activity: Arc<AtomicU64>,
-    shutdown_signal: Arc<AtomicBool>,
-    watcher_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     is_loading: Arc<Mutex<bool>>,
     loading_condvar: Arc<Condvar>,
 }
 
 impl TranscriptionManager {
     pub fn new(app_handle: &AppHandle, model_manager: Arc<ModelManager>) -> Result<Self> {
+        let now_ms = Self::now_ms();
         let manager = Self {
             engine: Arc::new(Mutex::new(None)),
             model_manager,
             app_handle: app_handle.clone(),
             current_model_id: Arc::new(Mutex::new(None)),
-            last_activity: Arc::new(AtomicU64::new(Self::now_ms())),
-            shutdown_signal: Arc::new(AtomicBool::new(false)),
-            watcher_handle: Arc::new(Mutex::new(None)),
+            last_activity: Arc::new(AtomicU64::new(now_ms)),
             is_loading: Arc::new(Mutex::new(false)),
             loading_condvar: Arc::new(Condvar::new()),
         };
-
-        // Start the idle watcher
-        {
-            let app_handle_cloned = app_handle.clone();
-            let manager_cloned = manager.clone();
-            let shutdown_signal = manager.shutdown_signal.clone();
-            let handle = thread::spawn(move || {
-                debug!("Idle watcher thread started");
-                while !shutdown_signal.load(Ordering::Relaxed) {
-                    thread::sleep(Duration::from_secs(10)); // Check every 10 seconds
-
-                    // Check shutdown signal again after sleep
-                    if shutdown_signal.load(Ordering::Relaxed) {
-                        break;
-                    }
-
-                    let settings = get_settings(&app_handle_cloned);
-                    let timeout = settings.model_unload_timeout;
-
-                    // Skip Immediately — that variant is handled by
-                    // maybe_unload_immediately() after each transcription.
-                    // Treating it as 0s here would unload the model mid-recording.
-                    if timeout == ModelUnloadTimeout::Immediately {
-                        continue;
-                    }
-
-                    // While recording, keep the idle timer fresh so the
-                    // model is never unloaded mid-session.
-                    let is_recording = app_handle_cloned
-                        .try_state::<Arc<AudioRecordingManager>>()
-                        .map_or(false, |a| a.is_recording());
-                    if is_recording {
-                        manager_cloned.touch_activity();
-                        continue;
-                    }
-
-                    if let Some(limit_seconds) = timeout.to_seconds() {
-                        let last = manager_cloned.last_activity.load(Ordering::Relaxed);
-                        let now_ms = TranscriptionManager::now_ms();
-                        let idle_ms = now_ms.saturating_sub(last);
-                        let limit_ms = limit_seconds * 1000;
-
-                        if idle_ms > limit_ms {
-                            // idle -> unload
-                            if manager_cloned.is_model_loaded() {
-                                let unload_start = std::time::Instant::now();
-                                info!(
-                                    "Model idle for {}s (limit: {}s), unloading",
-                                    idle_ms / 1000,
-                                    limit_seconds
-                                );
-                                match manager_cloned.unload_model() {
-                                    Ok(()) => {
-                                        let unload_duration = unload_start.elapsed();
-                                        info!(
-                                            "Model unloaded due to inactivity (took {}ms)",
-                                            unload_duration.as_millis()
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to unload idle model: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                debug!("Idle watcher thread shutting down gracefully");
-            });
-            *manager.watcher_handle.lock().unwrap() = Some(handle);
-        }
 
         Ok(manager)
     }
@@ -238,19 +161,6 @@ impl TranscriptionManager {
     /// Reset the idle timer to now.
     fn touch_activity(&self) {
         self.last_activity.store(Self::now_ms(), Ordering::Relaxed);
-    }
-
-    /// Unloads the model immediately if the setting is enabled and the model is loaded
-    pub fn maybe_unload_immediately(&self, context: &str) {
-        let settings = get_settings(&self.app_handle);
-        if settings.model_unload_timeout == ModelUnloadTimeout::Immediately
-            && self.is_model_loaded()
-        {
-            info!("Immediately unloading model after {}", context);
-            if let Err(e) = self.unload_model() {
-                warn!("Failed to immediately unload model: {}", e);
-            }
-        }
     }
 
     pub fn load_model(&self, model_id: &str) -> Result<()> {
@@ -405,6 +315,12 @@ impl TranscriptionManager {
                     emit_loading_failed(&error_msg);
                     anyhow::anyhow!(error_msg)
                 })?;
+                // Cold-load warmup: run one tiny silent pass to reduce first real-call latency.
+                if let Err(err) = engine
+                    .transcribe_samples(vec![0.0_f32; 1600], Some(Qwen3InferenceParams::default()))
+                {
+                    warn!("Qwen3 warmup after load failed (non-fatal): {}", err);
+                }
                 LoadedEngine::Qwen3(engine)
             }
         };
@@ -484,7 +400,6 @@ impl TranscriptionManager {
 
         if audio.is_empty() {
             debug!("Empty audio vector");
-            self.maybe_unload_immediately("empty audio");
             return Ok(String::new());
         }
 
@@ -756,8 +671,6 @@ impl TranscriptionManager {
             info!("Transcription result: {}", final_result);
         }
 
-        self.maybe_unload_immediately("transcription");
-
         Ok(final_result)
     }
 }
@@ -843,31 +756,5 @@ pub fn get_available_accelerators() -> AvailableAccelerators {
         whisper: whisper_options,
         ort: ort_options,
         gpu_devices: cached_gpu_devices().to_vec(),
-    }
-}
-
-impl Drop for TranscriptionManager {
-    fn drop(&mut self) {
-        // Skip shutdown unless this is the very last clone. TranscriptionManager
-        // is cloned by initiate_model_load() and the watcher thread — those
-        // clones dropping must not kill the watcher. The watcher thread holds
-        // its own clone, so engine's strong_count is always >= 2 while the
-        // watcher is alive. When it reaches 1, only this instance remains
-        // and we can safely shut down.
-        if Arc::strong_count(&self.engine) > 1 {
-            return;
-        }
-
-        // Signal the watcher thread to shutdown
-        self.shutdown_signal.store(true, Ordering::Relaxed);
-
-        // Wait for the thread to finish gracefully
-        if let Some(handle) = self.watcher_handle.lock().unwrap().take() {
-            if let Err(e) = handle.join() {
-                warn!("Failed to join idle watcher thread: {:?}", e);
-            } else {
-                debug!("Idle watcher thread joined successfully");
-            }
-        }
     }
 }

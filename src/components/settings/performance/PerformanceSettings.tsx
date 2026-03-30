@@ -14,8 +14,6 @@ import { AccelerationSelector } from "../AccelerationSelector";
 type NumericSettingKey =
   | "qwen3_startup_preload_delay_ms"
   | "qwen35_startup_preload_delay_ms"
-  | "qwen3_max_threads"
-  | "qwen35_max_threads"
   | "qwen3_server_ready_timeout_sec"
   | "qwen35_server_ready_timeout_sec"
   | "qwen35_inference_timeout_sec";
@@ -161,7 +159,7 @@ export const PerformanceSettings: React.FC = () => {
               min={0}
               max={15000}
               step={100}
-              defaultValue={900}
+              defaultValue={0}
               disabled={!qwen3StartupPreloadEnabled}
             />
             <NumericSettingField
@@ -175,29 +173,6 @@ export const PerformanceSettings: React.FC = () => {
               min={10}
               max={120}
               defaultValue={30}
-            />
-          </div>
-        </SettingContainer>
-
-        <SettingContainer
-          title={t("settings.performance.qwenPanel.runtime.title")}
-          description={t("settings.performance.qwenPanel.runtime.description")}
-          descriptionMode="tooltip"
-          layout="stacked"
-          grouped={true}
-        >
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <NumericSettingField
-              settingKey="qwen3_max_threads"
-              label={t(
-                "settings.performance.qwenPanel.runtime.qwen3Threads.label",
-              )}
-              hint={t(
-                "settings.performance.qwenPanel.runtime.qwen3Threads.hint",
-              )}
-              min={0}
-              max={16}
-              defaultValue={0}
             />
           </div>
         </SettingContainer>
@@ -279,9 +254,7 @@ export const PerformanceSettings: React.FC = () => {
           }}
           isUpdating={isUpdating("qwen35_warmup_enabled")}
           label={t("settings.performance.qwenPanel.qwen35Warmup.label")}
-          description={t(
-            "settings.performance.qwenPanel.qwen35Warmup.description",
-          )}
+          description={t("settings.performance.qwenPanel.qwen35Warmup.description")}
           descriptionMode="tooltip"
           grouped={true}
         />
@@ -307,7 +280,7 @@ export const PerformanceSettings: React.FC = () => {
               min={0}
               max={15000}
               step={100}
-              defaultValue={1400}
+              defaultValue={0}
               disabled={!qwen35StartupPreloadEnabled}
             />
             <NumericSettingField
@@ -326,25 +299,13 @@ export const PerformanceSettings: React.FC = () => {
         </SettingContainer>
 
         <SettingContainer
-          title={t("settings.performance.qwenPanel.runtime.title")}
-          description={t("settings.performance.qwenPanel.runtime.description")}
+          title={t("settings.performance.qwenPanel.timeouts.title")}
+          description={t("settings.performance.qwenPanel.timeouts.description")}
           descriptionMode="tooltip"
           layout="stacked"
           grouped={true}
         >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <NumericSettingField
-              settingKey="qwen35_max_threads"
-              label={t(
-                "settings.performance.qwenPanel.runtime.qwen35Threads.label",
-              )}
-              hint={t(
-                "settings.performance.qwenPanel.runtime.qwen35Threads.hint",
-              )}
-              min={0}
-              max={16}
-              defaultValue={0}
-            />
             <NumericSettingField
               settingKey="qwen35_inference_timeout_sec"
               label={t(

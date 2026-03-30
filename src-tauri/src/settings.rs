@@ -9,7 +9,7 @@ use tauri_plugin_store::StoreExt;
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
 pub const LOCAL_QWEN35_PROVIDER_ID: &str = "local-qwen35";
-pub const LOCAL_QWEN35_DEFAULT_MODEL_ID: &str = "qwen35-optiq-2b";
+pub const LOCAL_QWEN35_DEFAULT_MODEL_ID: &str = "qwen35-optiq-0.8b";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -208,6 +208,7 @@ impl Default for AutoSubmitKey {
     }
 }
 
+#[allow(dead_code)]
 impl ModelUnloadTimeout {
     pub fn to_minutes(self) -> Option<u64> {
         match self {
@@ -346,6 +347,14 @@ pub struct AppSettings {
     pub custom_words: Vec<String>,
     #[serde(default)]
     pub model_unload_timeout: ModelUnloadTimeout,
+    #[serde(default = "default_qwen_adaptive_unload_enabled")]
+    pub qwen_adaptive_unload_enabled: bool,
+    #[serde(default = "default_qwen_periodic_keep_warm_enabled")]
+    pub qwen_periodic_keep_warm_enabled: bool,
+    #[serde(default = "default_qwen_periodic_keep_warm_interval_sec")]
+    pub qwen_periodic_keep_warm_interval_sec: u64,
+    #[serde(default = "default_qwen_periodic_keep_warm_active_window_min")]
+    pub qwen_periodic_keep_warm_active_window_min: u64,
     #[serde(default = "default_word_correction_threshold")]
     pub word_correction_threshold: f64,
     #[serde(default = "default_history_limit")]
@@ -517,7 +526,7 @@ fn default_post_process_enabled() -> bool {
 }
 
 fn default_post_process_system_prompt() -> String {
-    "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n4. Never output explanations, bullet examples, wrappers, or meta commentary.\n5. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n6. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n7. If input content is empty, return an empty string.".to_string()
+    "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Treat the selected user prompt template as instruction metadata; do not echo, paraphrase, or restate template rule lines.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string.".to_string()
 }
 
 fn default_post_process_quality() -> String {
@@ -528,6 +537,7 @@ fn normalize_post_process_quality(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "fast" => "fast".to_string(),
         "quality" => "quality".to_string(),
+        "custom" => "custom".to_string(),
         _ => "balanced".to_string(),
     }
 }
@@ -556,12 +566,28 @@ fn default_qwen_startup_preload_strategy() -> String {
     "parallel".to_string()
 }
 
+fn default_qwen_adaptive_unload_enabled() -> bool {
+    true
+}
+
+fn default_qwen_periodic_keep_warm_enabled() -> bool {
+    false
+}
+
+fn default_qwen_periodic_keep_warm_interval_sec() -> u64 {
+    300
+}
+
+fn default_qwen_periodic_keep_warm_active_window_min() -> u64 {
+    30
+}
+
 fn default_qwen3_startup_preload_enabled() -> bool {
     true
 }
 
 fn default_qwen3_startup_preload_delay_ms() -> u64 {
-    900
+    0
 }
 
 fn default_qwen3_max_threads() -> usize {
@@ -577,7 +603,7 @@ fn default_qwen35_startup_preload_enabled() -> bool {
 }
 
 fn default_qwen35_startup_preload_delay_ms() -> u64 {
-    1400
+    0
 }
 
 fn default_qwen35_warmup_enabled() -> bool {
@@ -625,6 +651,14 @@ pub fn normalize_qwen_startup_preload_strategy(value: &str) -> String {
 
 pub fn normalize_qwen_startup_preload_delay_ms(value: u64) -> u64 {
     value.clamp(0, 15_000)
+}
+
+pub fn normalize_qwen_periodic_keep_warm_interval_sec(value: u64) -> u64 {
+    value.clamp(60, 3_600)
+}
+
+pub fn normalize_qwen_periodic_keep_warm_active_window_min(value: u64) -> u64 {
+    value.clamp(5, 240)
 }
 
 pub fn normalize_qwen_max_threads(value: usize) -> usize {
@@ -780,18 +814,29 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         LLMPrompt {
             id: "template_translate_english_default".to_string(),
             name: "Translate to English (Default)".to_string(),
-            prompt: "Translate the transcript into natural English.\n\nInput:\n${output}\n\nRules:\n1. Translate all Chinese content, including short utterances.\n2. For short Chinese interjections, use concise natural English (e.g. 好 -> okay, 行 -> okay, 棒 -> great).\n3. For short standalone Chinese numerals, convert to Arabic digits (e.g. 一二三 -> 123). Do not apply digit substitution inside words or compounds.\n4. Preserve existing English words, names, acronyms, numbers, and mixed-language tokens when already correct.\n5. Output only the final translation text.".to_string(),
+            prompt: "Translate the transcript into natural English.\n\nInput:\n${output}\n\nRules:\n1. Translate all Chinese content, including short utterances.\n2. For short Chinese interjections, use concise natural English (e.g. 好 -> okay, 行 -> okay, 棒 -> great).\n3. If Chinese numerals appear as standalone number/list items, convert them to Arabic digits (e.g. 一二三四五六七 -> 1234567; 一、二、三 -> 1、2、3).\n4. Normalize common model-size wording to Arabic numeric form when appropriate (e.g. 零点8B -> 0.8B, 两B -> 2B).\n5. Do not convert inside words/compounds (e.g. 一些 must stay semantic, not 1些).\n6. Preserve existing English words, names, acronyms, numbers, and mixed-language tokens when already correct.\n7. Output only the final translation text.".to_string(),
         },
         LLMPrompt {
             id: "template_chinese_markdown_polish".to_string(),
             name: "中文口语整理（Markdown）".to_string(),
-            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 内容是多点信息时用 Markdown 列表整理；短句则输出一行简洁文本。\n5. 仅输出最终结果，不要解释。".to_string(),
+            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）。不要把词内字符误替换（例如“一些”不能变成“1些”）。\n5. 如内容包含“第一点/第二点/第X点/1、2、3”等并列结构，输出为 Markdown 列表；否则输出一行简洁文本。\n6. 禁止输出本模板条款本身（例如“1. 保持原意与事实...”这类说明文字）。\n7. 仅输出最终结果，不要解释。".to_string(),
         },
     ]
 }
 
 fn is_legacy_default_translate_prompt(value: &str) -> bool {
-    value.trim() == "${output}"
+    let trimmed = value.trim();
+    trimmed == "${output}"
+        || trimmed
+            == "Translate the transcript into natural English.\n\nInput:\n${output}\n\nRules:\n1. Translate all Chinese content, including short utterances.\n2. For short Chinese interjections, use concise natural English (e.g. 好 -> okay, 行 -> okay, 棒 -> great).\n3. For short standalone Chinese numerals, convert to Arabic digits (e.g. 一二三 -> 123). Do not apply digit substitution inside words or compounds.\n4. Preserve existing English words, names, acronyms, numbers, and mixed-language tokens when already correct.\n5. Output only the final translation text."
+        || trimmed
+            == "Translate the transcript into natural English.\n\nInput:\n${output}\n\nRules:\n1. Translate all Chinese content, including short utterances.\n2. For short Chinese interjections, use concise natural English (e.g. 好 -> okay, 行 -> okay, 棒 -> great).\n3. If Chinese numerals appear as a standalone number/list item, convert them to Arabic digits (e.g. 一二三四五六七 -> 1234567; 一、二、三 -> 1、2、3).\n4. Do not convert inside words/compounds (e.g. 一些 must stay semantic, not 1些).\n5. Preserve existing English words, names, acronyms, numbers, and mixed-language tokens when already correct.\n6. Output only the final translation text."
+}
+
+fn is_legacy_default_chinese_markdown_prompt(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed
+        == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 内容是多点信息时用 Markdown 列表整理；短句则输出一行简洁文本。\n5. 仅输出最终结果，不要解释。"
 }
 
 fn is_prunable_legacy_preset_prompt(prompt: &LLMPrompt) -> bool {
@@ -824,6 +869,10 @@ fn is_legacy_default_post_process_system_prompt(value: &str) -> bool {
     trimmed == "You are a strict transcription post-processor.\nOutput rules:\n1. Output only the final processed text.\n2. Do not include reasoning or analysis.\n3. Do not use <think> tags.\n4. Do not include bullet points, examples, or explanations.\n5. Keep original meaning and language unless explicitly requested otherwise."
         || trimmed
             == "You are a strict transcript translator.\nTask:\nTranslate incoming transcript text into natural English.\nOutput rules:\n1. Output English only.\n2. Always translate, including very short inputs (single-word or 1-3 character phrases).\n3. For short Chinese interjections, produce concise natural English (e.g. 好 -> okay, 棒 -> great, 行 -> okay).\n4. Convert Chinese numerals to English words when short and standalone (e.g. 一二三 -> one two three).\n5. Preserve existing English words, product names, acronyms, and numbers accurately (e.g. HANDY, Qwen3.5, 1.7B).\n6. Do not include reasoning, <think>, bullet points, or explanations.\n7. Return only the final translated text."
+        || trimmed
+            == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n4. Never output explanations, bullet examples, wrappers, or meta commentary.\n5. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n6. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n7. If input content is empty, return an empty string."
+        || trimmed
+            == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, bullet examples, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string."
 }
 
 fn default_whisper_gpu_device() -> i32 {
@@ -917,7 +966,9 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
 
                 let should_sync_prompt = existing.prompt.trim().is_empty()
                     || (existing.id == "template_translate_english_default"
-                        && is_legacy_default_translate_prompt(&existing.prompt));
+                        && is_legacy_default_translate_prompt(&existing.prompt))
+                    || (existing.id == "template_chinese_markdown_polish"
+                        && is_legacy_default_chinese_markdown_prompt(&existing.prompt));
                 if should_sync_prompt && existing.prompt != default_prompt.prompt {
                     existing.prompt = default_prompt.prompt.clone();
                     changed = true;
@@ -1032,10 +1083,30 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
         changed = true;
     }
 
+    let normalized_keep_warm_interval = normalize_qwen_periodic_keep_warm_interval_sec(
+        settings.qwen_periodic_keep_warm_interval_sec,
+    );
+    if settings.qwen_periodic_keep_warm_interval_sec != normalized_keep_warm_interval {
+        settings.qwen_periodic_keep_warm_interval_sec = normalized_keep_warm_interval;
+        changed = true;
+    }
+
+    let normalized_keep_warm_window = normalize_qwen_periodic_keep_warm_active_window_min(
+        settings.qwen_periodic_keep_warm_active_window_min,
+    );
+    if settings.qwen_periodic_keep_warm_active_window_min != normalized_keep_warm_window {
+        settings.qwen_periodic_keep_warm_active_window_min = normalized_keep_warm_window;
+        changed = true;
+    }
+
     let normalized_qwen3_delay =
         normalize_qwen_startup_preload_delay_ms(settings.qwen3_startup_preload_delay_ms);
     if settings.qwen3_startup_preload_delay_ms != normalized_qwen3_delay {
         settings.qwen3_startup_preload_delay_ms = normalized_qwen3_delay;
+        changed = true;
+    } else if settings.qwen3_startup_preload_delay_ms == 900 {
+        // Migrate previous default to immediate preload for better first-use latency.
+        settings.qwen3_startup_preload_delay_ms = default_qwen3_startup_preload_delay_ms();
         changed = true;
     }
 
@@ -1056,6 +1127,10 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
         normalize_qwen_startup_preload_delay_ms(settings.qwen35_startup_preload_delay_ms);
     if settings.qwen35_startup_preload_delay_ms != normalized_qwen35_delay {
         settings.qwen35_startup_preload_delay_ms = normalized_qwen35_delay;
+        changed = true;
+    } else if settings.qwen35_startup_preload_delay_ms == 1400 {
+        // Migrate previous default to immediate preload for better first-use latency.
+        settings.qwen35_startup_preload_delay_ms = default_qwen35_startup_preload_delay_ms();
         changed = true;
     }
 
@@ -1157,6 +1232,11 @@ pub fn get_default_settings() -> AppSettings {
         log_level: default_log_level(),
         custom_words: Vec::new(),
         model_unload_timeout: ModelUnloadTimeout::default(),
+        qwen_adaptive_unload_enabled: default_qwen_adaptive_unload_enabled(),
+        qwen_periodic_keep_warm_enabled: default_qwen_periodic_keep_warm_enabled(),
+        qwen_periodic_keep_warm_interval_sec: default_qwen_periodic_keep_warm_interval_sec(),
+        qwen_periodic_keep_warm_active_window_min:
+            default_qwen_periodic_keep_warm_active_window_min(),
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
@@ -1398,8 +1478,10 @@ mod tests {
             .iter()
             .find(|prompt| prompt.id == "template_translate_english_default")
             .expect("translation template should exist");
-        assert!(translate.prompt.contains("Translate the transcript into natural English."));
-        assert!(translate.prompt.contains("一二三 -> 123"));
+        assert!(translate
+            .prompt
+            .contains("Translate the transcript into natural English."));
+        assert!(translate.prompt.contains("一二三四五六七 -> 1234567"));
     }
 
     #[test]
