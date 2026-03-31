@@ -40,6 +40,10 @@ const DESKTOP_EXPORT_ASR_SCRIPT_FILE: &str = "Handy-asr-post-script.py";
 const DESKTOP_EXPORT_LLM_SCRIPT_FILE: &str = "Handy-llm-post-script.py";
 const DEFAULT_ASR_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
 # Handy external script template (stage: asr_post)
+# Layering:
+# - System/User prompts are model-side constraints.
+# - This external script is for replaceable business rules.
+# - Built-in logic remains the final safety fallback.
 # How APP runs scripts:
 # - .py           -> python3 <script_path>
 # - .js/.mjs/.cjs -> node <script_path>
@@ -47,7 +51,7 @@ const DEFAULT_ASR_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
 # - other suffix  -> run directly as executable (e.g. Rust compiled binary)
 #
 # stdin:  one JSON line
-#   {"stage":"asr_post|llm_post","text":"...","lang":"...","model_id":"...","metadata":{...}}
+#   {"stage":"asr_post|llm_post","text":"...","lang":"...","model_id":"...","provider_id":"...","prompt_id":"...","system_prompt":"...","user_prompt_template":"...","metadata":{...}}
 # stdout: plain text OR JSON {"text":"..."} (recommended)
 # fallback: timeout / error / invalid output -> APP falls back to original text
 import json
@@ -84,6 +88,11 @@ if __name__ == "__main__":
 "#;
 const DEFAULT_LLM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
 # Handy external script template (stage: llm_post)
+# Layering:
+# - System prompt: global contract (highest priority).
+# - User prompt template: task/style instructions.
+# - This external script: replaceable post-clean rules.
+# - Built-in fallback: safety and stability guardrail.
 # See the ASR template header for runner mapping and protocol details.
 import json
 import sys

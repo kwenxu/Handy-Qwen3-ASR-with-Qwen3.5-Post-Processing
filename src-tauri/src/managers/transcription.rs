@@ -677,6 +677,8 @@ impl TranscriptionManager {
                 model_id: Some(settings.selected_model.as_str()),
                 metadata: Some(serde_json::json!({
                     "phase": "after_transcription",
+                    "input_length": filtered_result.chars().count(),
+                    "app_language": settings.app_language,
                 })),
                 ..Default::default()
             },
