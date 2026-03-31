@@ -845,7 +845,7 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         LLMPrompt {
             id: "template_chinese_markdown_polish".to_string(),
             name: "中文废话整理（精简+列表）".to_string(),
-            prompt: "请将下面转录文本做“中文废话整理”，不要翻译。\n\n输入：\n${output}\n\n目标：\n去掉废话，保留重点；需要时用列表表达。\n\n规则（严格）：\n1. 只输出最终结果，不解释，不复述规则文本。\n2. 删除口头禅、语气词、寒暄和机械重复（如“嗯/啊/这个吧/就是/然后/对吧/懂我意思吗/我也不知道怎么说/好吧”）。\n3. 保留事实、结论、动作、条件、时间、数字、专有名词；不新增信息，不改变原意。\n4. 若存在多个并列要点，或出现分点信号（第一/第二/第三/首先/其次/另外/最后/1、2、3），输出 Markdown 有序列表（1. 2. 3.）。\n5. 若是单一要点，输出 1-2 句简洁短句。\n6. 数字规范：中文数字按语义转阿拉伯数字（零点8B/零点八B -> 0.8B；两B -> 2B；三十2 -> 32；1百五十四 -> 154）；禁止词内替换（如“一些”不能变“1些”）。\n7. 输入为空或仅噪音时返回空字符串。".to_string(),
+            prompt: "请将下面转录文本做“中文废话整理”，不要翻译。\n\n输入：\n${output}\n\n目标：\n去掉废话，保留重点；按内容选择段落或列表，不要每次都强制列表。\n\n规则（严格）：\n1. 只输出最终结果，不解释，不复述规则文本。\n2. 删除口头禅、语气词、寒暄和机械重复（如“嗯/啊/这个吧/就是/然后/对吧/懂我意思吗/我也不知道怎么说/好吧”）。\n3. 保留事实、结论、动作、条件、时间、数字、专有名词；不新增信息，不改变原意。\n4. 列表策略：\n   - 出现明确顺序信号（第一/第二/第三/首先/其次/另外/最后/1、2、3）时，用有序列表（1. 2. 3.）。\n   - 仅有并列事项但无顺序时，用无序列表（-）。\n   - 普通叙述、单一观点、连续说明时，用自然段，不要硬转列表。\n5. 数字规范：中文数字按语义转阿拉伯数字（零点8B/零点八B -> 0.8B；两B -> 2B；三十2 -> 32；1百五十四 -> 154）；“一两/两三/三四”这类近似范围表达保持原样（如“一两句话”不要改成“12句话”）；禁止词内替换（如“一些”不能变“1些”）。\n6. 输入为空或仅噪音时返回空字符串。".to_string(),
         },
     ]
 }
@@ -861,6 +861,11 @@ fn is_legacy_default_translate_prompt(value: &str) -> bool {
 
 fn is_legacy_default_chinese_markdown_prompt(value: &str) -> bool {
     let trimmed = value.trim();
+    if trimmed.contains("中文废话整理")
+        && trimmed.contains("去掉废话，保留重点；需要时用列表表达。")
+    {
+        return true;
+    }
     if trimmed.contains("中文口语整理")
         && trimmed.contains("结构化（按片段，不是全局压缩）")
         && trimmed.contains("要保持屏幕常亮")
@@ -1610,6 +1615,8 @@ mod tests {
             .find(|prompt| prompt.id == "template_chinese_markdown_polish")
             .expect("chinese template should exist");
         assert_eq!(chinese.name, "中文废话整理（精简+列表）");
-        assert!(chinese.prompt.contains("去掉废话，保留重点；需要时用列表表达。"));
+        assert!(chinese
+            .prompt
+            .contains("按内容选择段落或列表，不要每次都强制列表。"));
     }
 }

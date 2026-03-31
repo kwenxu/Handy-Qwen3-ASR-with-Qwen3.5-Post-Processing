@@ -200,6 +200,10 @@ fn is_list_separator_char(ch: char) -> bool {
     matches!(ch, '、' | ',' | '，' | ';' | '；' | ':' | '：' | '/' | '／')
 }
 
+fn is_b_unit_char(ch: char) -> bool {
+    matches!(ch, 'B' | 'b')
+}
+
 fn is_chinese_unit_char(ch: char) -> bool {
     matches!(ch, '十' | '百' | '千' | '万' | '萬')
 }
@@ -300,10 +304,23 @@ fn normalize_mixed_chinese_unit_numbers_to_arabic(input: &str) -> String {
         } else {
             None
         };
-        let next = chars.get(end).copied();
-        let touches_ascii_word = prev
+        let mut next_non_ws = None;
+        let mut j = end;
+        while j < chars.len() {
+            let ch = chars[j];
+            if !ch.is_whitespace() {
+                next_non_ws = Some(ch);
+                break;
+            }
+            j += 1;
+        }
+        let left_touches_ascii_word = prev
             .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-            || next.is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'));
+            && !prev.is_some_and(is_b_unit_char);
+        let right_touches_ascii_word = next_non_ws
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+            && !next_non_ws.is_some_and(is_b_unit_char);
+        let touches_ascii_word = left_touches_ascii_word || right_touches_ascii_word;
         if touches_ascii_word {
             for ch in token {
                 out.push(*ch);
@@ -333,10 +350,6 @@ fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
         }
     }
 
-    fn is_b_unit(ch: char) -> bool {
-        matches!(ch, 'B' | 'b')
-    }
-
     fn skip_spaces(chars: &[char], mut idx: usize) -> usize {
         while idx < chars.len() && chars[idx].is_whitespace() {
             idx += 1;
@@ -349,6 +362,22 @@ fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
     let mut i = 0usize;
 
     while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            let k = skip_spaces(&chars, j);
+            if k < chars.len() && is_b_unit_char(chars[k]) {
+                for ch in &chars[i..j] {
+                    out.push(*ch);
+                }
+                out.push('B');
+                i = k + 1;
+                continue;
+            }
+        }
+
         if let Some(int_digit) = parse_digit_char(chars[i]) {
             let mut j = skip_spaces(&chars, i + 1);
             let mut handled = false;
@@ -359,7 +388,7 @@ fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
                 if j < chars.len() {
                     if let Some(frac_digit) = parse_digit_char(chars[j]) {
                         let k = skip_spaces(&chars, j + 1);
-                        if k < chars.len() && is_b_unit(chars[k]) {
+                        if k < chars.len() && is_b_unit_char(chars[k]) {
                             out.push(int_digit);
                             out.push('.');
                             out.push(frac_digit);
@@ -377,7 +406,7 @@ fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
 
             // integer form, e.g. 两B / 2 B / 二 B / 9b
             let k = skip_spaces(&chars, i + 1);
-            if k < chars.len() && is_b_unit(chars[k]) {
+            if k < chars.len() && is_b_unit_char(chars[k]) {
                 out.push(int_digit);
                 out.push('B');
                 i = k + 1;
@@ -393,6 +422,20 @@ fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
 }
 
 fn normalize_standalone_chinese_digits_to_arabic(input: &str) -> String {
+    fn is_approximate_range_pair(pair: (char, char)) -> bool {
+        matches!(
+            pair,
+            ('一', '两')
+                | ('两', '三')
+                | ('三', '四')
+                | ('四', '五')
+                | ('五', '六')
+                | ('六', '七')
+                | ('七', '八')
+                | ('八', '九')
+        )
+    }
+
     let chars: Vec<char> = input.chars().collect();
     let mut out = String::with_capacity(input.len());
     let mut i = 0usize;
@@ -438,7 +481,12 @@ fn normalize_standalone_chinese_digits_to_arabic(input: &str) -> String {
             || next_non_ws.is_some_and(is_list_separator_char);
         let prev_is_list_sep = prev.is_some_and(is_list_separator_char);
         let should_convert = if seq_len >= 2 {
-            true
+            let approximate_pair = if seq_len == 2 {
+                is_approximate_range_pair((chars[start], chars[start + 1]))
+            } else {
+                false
+            };
+            !(approximate_pair && next_is_cjk && !next_is_list_sep)
         } else if next_is_list_sep {
             true
         } else if prev_is_list_sep && !next_is_cjk {
@@ -1956,10 +2004,24 @@ mod tests {
     }
 
     #[test]
+    fn converts_large_chinese_number_with_b_suffix() {
+        let input = "二百三十五B、二百三十五 B。";
+        let output = normalize_standalone_chinese_digits_to_arabic(&normalize_mixed_chinese_unit_numbers_to_arabic(input));
+        assert_eq!(output, "235B、235B。");
+    }
+
+    #[test]
     fn keeps_semantic_single_digit_phrase_even_after_comma() {
         let input = "我们先说一段话，一大段前置的话去说一说。";
         let output = normalize_standalone_chinese_digits_to_arabic(input);
         assert_eq!(output, "我们先说一段话，一大段前置的话去说一说。");
+    }
+
+    #[test]
+    fn keeps_approximate_range_phrase_not_as_concatenated_number() {
+        let input = "一两句话、两三天、三四个例子。";
+        let output = normalize_standalone_chinese_digits_to_arabic(input);
+        assert_eq!(output, "一两句话、两三天、三四个例子。");
     }
 
     #[test]
