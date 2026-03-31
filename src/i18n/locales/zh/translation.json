@@ -400,11 +400,48 @@
       "scriptBlocks": {
         "asr": {
           "title": "步骤 3 · APP 处理脚本（转录后）",
-          "description": "配置“转录后脚本阶段”的外部可插拔脚本（Python/JS/Shell）。该脚本在运行时调用，不会内嵌编译进 APP。"
+          "description": "此步骤由“内置处理 + 外部脚本”组成。外部脚本为可插拔（Python/JS/Shell），运行时调用。"
         },
         "llm": {
           "title": "步骤 5 · APP 处理脚本（后处理模型后）",
-          "description": "配置“后处理模型后脚本阶段”的外部可插拔脚本（Python/JS/Shell）。该脚本在运行时调用，不会内嵌编译进 APP。"
+          "description": "此步骤由“内置处理 + 外部脚本”组成。外部脚本为可插拔（Python/JS/Shell），运行时调用。"
+        },
+        "builtinEntry": "查看内置处理清单（点击展开）",
+        "builtinNote": "说明：内置处理用于稳定兜底（不可直接替换）；外部脚本用于覆盖/扩展（可导入、导出、测试）。",
+        "externalNote": "说明：导出的外置脚本模板默认包含以下功能，你可以按需求继续改写。",
+        "asrBuiltin": {
+          "title": "内置处理（转录后）",
+          "description": "仅保留稳定性兜底，不做可替换业务规则。",
+          "items": {
+            "item1": "外部脚本关闭或路径为空时，直接跳过脚本阶段。",
+            "item2": "外部脚本超时、报错或输出无效时，自动回退原文本。",
+            "item3": "保证流程可继续，不因脚本异常中断主链路。"
+          }
+        },
+        "asrExternal": {
+          "title": "外置脚本模板默认功能（转录后）",
+          "description": "导出的“转录后脚本模板”默认包含这两项功能。",
+          "items": {
+            "item1": "自定义词纠正（按你的词表与策略处理）。",
+            "item2": "口头噪音/填充词过滤（按语言或场景定制）。"
+          }
+        },
+        "llmBuiltin": {
+          "title": "内置处理（后处理模型后）",
+          "description": "仅保留安全与稳定兜底，不承载可替换业务规则。",
+          "items": {
+            "item1": "清理 <think> 标签、不可见字符与明显重复行。",
+            "item2": "若结果可疑则拒绝并回退（本地模型会自动重试一次）。",
+            "item3": "保证异常输出不会直接进入最终文本。"
+          }
+        },
+        "llmExternal": {
+          "title": "外置脚本模板默认功能（后处理模型后）",
+          "description": "导出的“后处理后脚本模板”默认包含这两项功能。",
+          "items": {
+            "item1": "模板泄漏清理（如“要求/规则/输入”等条款文本）。",
+            "item2": "数字规范与混写转换（如“三十2 -> 32”“1百五十四 -> 154”）。"
+          }
         }
       },
       "outputStage": {
@@ -616,9 +653,9 @@
           },
           "protocol": {
             "title": "APP 脚本输入输出协议",
-            "description": "每次执行会通过 stdin 传入一行 JSON；脚本应在 stdout 返回纯文本或 JSON。",
-            "contract": "stdin JSON：{\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout JSON（推荐）：{\"text\":\"...\"}\nstdout 纯文本：...",
-            "tip": "可用 <code>stage</code> 区分“转录后脚本阶段”和“后处理后脚本阶段”。脚本非零退出、超时或输出无效时会自动回退到原文本。"
+            "description": "APP 会按脚本后缀自动选择运行器，并通过 stdin/stdout 传递数据。",
+            "contract": "运行器：.py -> python3；.js/.mjs/.cjs -> node；.sh -> bash；其他 -> 直接可执行文件。\nstdin JSON：{\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout：{\"text\":\"...\"}（推荐）或纯文本。",
+            "tip": "stage=asr_post 对应转录后脚本，stage=llm_post 对应后处理后脚本。脚本超时、报错、非零退出或输出无效时会自动回退原文本。"
           },
           "templates": {
             "title": "默认模板",
@@ -805,6 +842,9 @@
     "portableUpdateTitle": "Manual update required",
     "portableUpdateMessage": "Portable installs cannot be updated automatically. To update: download the latest NSIS installer from GitHub Releases, install it to the same folder, then copy your Data/ folder (settings, models, recordings) from the old version to the new one.",
     "portableUpdateButton": "Open GitHub Releases",
+    "transcription": {
+      "label": "转录"
+    },
     "postProcess": {
       "providerUnknown": "未知提供商",
       "notConfigured": "未选择模型",

@@ -163,6 +163,77 @@ const CollapsibleBlock: React.FC<CollapsibleBlockProps> = ({
   );
 };
 
+const BuiltInRuleList: React.FC<{
+  title: string;
+  description: string;
+  items: string[];
+  note: string;
+  entryLabel: string;
+}> = ({ title, description, items, note, entryLabel }) => {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <SettingContainer
+      title={title}
+      description={description}
+      descriptionMode="tooltip"
+      layout="stacked"
+      grouped={true}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-md border border-mid-gray/20 bg-mid-gray/5 px-3 py-2 text-left hover:border-logo-primary/50 transition-colors"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold text-text">{entryLabel}</p>
+          <ChevronDown
+            className={`h-4 w-4 text-logo-primary transition-transform ${open ? "rotate-180" : "rotate-0"}`}
+          />
+        </div>
+      </button>
+      {open ? (
+        <>
+          <div className="rounded-md border border-mid-gray/20 bg-mid-gray/5 p-3 space-y-1">
+            {items.map((item, index) => (
+              <p key={`${title}-${index}`} className="text-xs text-text">
+                {index + 1}. {item}
+              </p>
+            ))}
+          </div>
+          <p className="text-xs text-mid-gray/70">{note}</p>
+        </>
+      ) : null}
+    </SettingContainer>
+  );
+};
+
+const ExternalRuleList: React.FC<{
+  title: string;
+  description: string;
+  items: string[];
+  note: string;
+}> = ({ title, description, items, note }) => {
+  return (
+    <SettingContainer
+      title={title}
+      description={description}
+      descriptionMode="tooltip"
+      layout="stacked"
+      grouped={true}
+    >
+      <div className="rounded-md border border-mid-gray/20 bg-mid-gray/5 p-3 space-y-1">
+        {items.map((item, index) => (
+          <p key={`${title}-${index}`} className="text-xs text-text">
+            {index + 1}. {item}
+          </p>
+        ))}
+      </div>
+      <p className="text-xs text-mid-gray/70">{note}</p>
+    </SettingContainer>
+  );
+};
+
 const PipelineOverview: React.FC<PipelineOverviewProps> = ({ onStepAction }) => {
   const { t } = useTranslation();
 
@@ -462,6 +533,30 @@ export const PerformanceSettings: React.FC = () => {
         open={openBlocks.asrScript}
         onToggle={() => toggleBlock("asrScript")}
       >
+        <BuiltInRuleList
+          title={t("settings.performance.scriptBlocks.asrBuiltin.title")}
+          description={t(
+            "settings.performance.scriptBlocks.asrBuiltin.description",
+          )}
+          entryLabel={t("settings.performance.scriptBlocks.builtinEntry")}
+          items={[
+            t("settings.performance.scriptBlocks.asrBuiltin.items.item1"),
+            t("settings.performance.scriptBlocks.asrBuiltin.items.item2"),
+            t("settings.performance.scriptBlocks.asrBuiltin.items.item3"),
+          ]}
+          note={t("settings.performance.scriptBlocks.builtinNote")}
+        />
+        <ExternalRuleList
+          title={t("settings.performance.scriptBlocks.asrExternal.title")}
+          description={t(
+            "settings.performance.scriptBlocks.asrExternal.description",
+          )}
+          items={[
+            t("settings.performance.scriptBlocks.asrExternal.items.item1"),
+            t("settings.performance.scriptBlocks.asrExternal.items.item2"),
+          ]}
+          note={t("settings.performance.scriptBlocks.externalNote")}
+        />
         <PostProcessingSettingsScriptHooks
           scope="asr"
           sectionId="perf-script-asr"
@@ -613,6 +708,31 @@ export const PerformanceSettings: React.FC = () => {
         open={openBlocks.llmScript}
         onToggle={() => toggleBlock("llmScript")}
       >
+        <BuiltInRuleList
+          title={t("settings.performance.scriptBlocks.llmBuiltin.title")}
+          description={t(
+            "settings.performance.scriptBlocks.llmBuiltin.description",
+          )}
+          entryLabel={t("settings.performance.scriptBlocks.builtinEntry")}
+          items={[
+            t("settings.performance.scriptBlocks.llmBuiltin.items.item1"),
+            t("settings.performance.scriptBlocks.llmBuiltin.items.item2"),
+            t("settings.performance.scriptBlocks.llmBuiltin.items.item3"),
+            t("settings.performance.scriptBlocks.llmBuiltin.items.item4"),
+          ]}
+          note={t("settings.performance.scriptBlocks.builtinNote")}
+        />
+        <ExternalRuleList
+          title={t("settings.performance.scriptBlocks.llmExternal.title")}
+          description={t(
+            "settings.performance.scriptBlocks.llmExternal.description",
+          )}
+          items={[
+            t("settings.performance.scriptBlocks.llmExternal.items.item1"),
+            t("settings.performance.scriptBlocks.llmExternal.items.item2"),
+          ]}
+          note={t("settings.performance.scriptBlocks.externalNote")}
+        />
         <PostProcessingSettingsScriptHooks
           scope="llm"
           sectionId="perf-script-llm"

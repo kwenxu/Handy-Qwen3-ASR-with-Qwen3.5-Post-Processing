@@ -400,11 +400,48 @@
       "scriptBlocks": {
         "asr": {
           "title": "Step 3 · APP Processing Script (After Transcription)",
-          "description": "Configure external plug-in scripts (Python/JS/Shell) for the post-transcription APP stage. Scripts run at runtime and are not embedded into the app binary."
+          "description": "This stage is \"built-in processing + external script\". External scripts are pluggable (Python/JS/Shell) and run at runtime."
         },
         "llm": {
           "title": "Step 5 · APP Processing Script (After Post-Process Model)",
-          "description": "Configure external plug-in scripts (Python/JS/Shell) for the final APP stage after post-processing model. Scripts run at runtime and are not embedded into the app binary."
+          "description": "This stage is \"built-in processing + external script\". External scripts are pluggable (Python/JS/Shell) and run at runtime."
+        },
+        "builtinEntry": "View Built-in Processing List (Click to expand)",
+        "builtinNote": "Note: built-in processing is a stability fallback (not directly replaceable); external scripts are for override/extension (import/export/test supported).",
+        "externalNote": "Note: exported external script templates include the defaults below; you can keep or rewrite them.",
+        "asrBuiltin": {
+          "title": "Built-in Processing (After Transcription)",
+          "description": "Only stability fallback is kept here; replaceable business rules are not listed as built-in.",
+          "items": {
+            "item1": "Skip script stage when external scripts are disabled or script path is empty.",
+            "item2": "Automatically fallback to original text when script times out, fails, or returns invalid output.",
+            "item3": "Keep the main pipeline alive even when script stage is abnormal."
+          }
+        },
+        "asrExternal": {
+          "title": "External Script Template Defaults (After Transcription)",
+          "description": "The exported ASR-stage template includes these two defaults.",
+          "items": {
+            "item1": "Custom-word correction (based on your own dictionary/rules).",
+            "item2": "Filler/noise filtering tuned by language and scenario."
+          }
+        },
+        "llmBuiltin": {
+          "title": "Built-in Processing (After Post-Process Model)",
+          "description": "Only safety and fallback are kept here; replaceable business rules are moved to external scripts.",
+          "items": {
+            "item1": "Removes <think> tags, invisible chars, and obvious repeated lines.",
+            "item2": "Rejects suspicious output and falls back (local model path auto-retries once).",
+            "item3": "Prevents abnormal output from entering final text directly."
+          }
+        },
+        "llmExternal": {
+          "title": "External Script Template Defaults (After Post-Process Model)",
+          "description": "The exported post-process-stage template includes these two defaults.",
+          "items": {
+            "item1": "Template leakage cleanup (e.g. echoed 'Rules/Input/Requirements').",
+            "item2": "Numeric normalization and mixed-form conversion (e.g. '三十2 -> 32', '1百五十四 -> 154')."
+          }
         }
       },
       "outputStage": {
@@ -616,9 +653,9 @@
           },
           "protocol": {
             "title": "APP Script I/O Contract",
-            "description": "Each script receives one JSON line from stdin and should return plain text or JSON on stdout.",
-            "contract": "stdin JSON: {\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout JSON (recommended): {\"text\":\"...\"}\nstdout plain text: ...",
-            "tip": "Use <code>stage</code> to branch logic for transcription-stage and post-process-stage scripts. Non-zero exit, timeout, or invalid output will fall back to original text."
+            "description": "APP selects runner by file extension and exchanges data through stdin/stdout.",
+            "contract": "Runner mapping: .py -> python3; .js/.mjs/.cjs -> node; .sh -> bash; other suffix -> direct executable.\nstdin JSON: {\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout: {\"text\":\"...\"} (recommended) or plain text.",
+            "tip": "stage=asr_post means after-transcription script, stage=llm_post means after-post-process script. Timeout/error/non-zero exit/invalid output falls back to original text."
           },
           "templates": {
             "title": "Default Templates",
@@ -805,6 +842,9 @@
     "portableUpdateTitle": "Manual update required",
     "portableUpdateMessage": "Portable installs cannot be updated automatically. To update: download the latest NSIS installer from GitHub Releases, install it to the same folder, then copy your Data/ folder (settings, models, recordings) from the old version to the new one.",
     "portableUpdateButton": "Open GitHub Releases",
+    "transcription": {
+      "label": "Transcription"
+    },
     "postProcess": {
       "providerUnknown": "Unknown provider",
       "notConfigured": "No model selected",

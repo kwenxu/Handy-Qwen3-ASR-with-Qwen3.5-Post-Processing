@@ -845,7 +845,7 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         LLMPrompt {
             id: "template_chinese_markdown_polish".to_string(),
             name: "中文口语整理（Markdown）".to_string(),
-            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n目标：\n在不丢失信息的前提下，将口语转写整理为清晰、自然、可直接使用的中文；优先保证信息完整，再提升可读性。\n\n执行规则（严格）：\n1. 仅输出最终文本；禁止输出“输入/规则/要求”等模板内容，禁止解释。\n2. 信息保真优先：保留事实、时间、数量、条件、因果、否定、对比、结论；仅删除口头禅、机械重复和明显噪音（如“嗯/啊/那个/就是”）。\n3. 列表判定：\n   - 若出现序号信号（“第一/第二/第X/首先/其次/最后/1、2、3”），必须输出有序列表（1. 2. 3.）。\n   - 若出现并列信号（“并且/而且/以及/另外/还有/同时/然后”）且可拆为两个及以上独立事项，输出无序列表（-）。\n   - 若只是连续叙述且无独立并列事项，则保持段落，不强行列表。\n4. 列表项必须是完整短句（建议 8-28 字），可做轻度语法补全，但不得新增事实或改写立场。\n5. 禁止过度精简：不要把多点信息压成一句概括；除非原文本来极短，否则尽量保留细节层次。\n6. 专有名词、产品名、模型名、缩写、URL、代码、英文词保持原样。\n7. 数字规范：中文数字按语义转阿拉伯数字（如“零点八B/零点8B -> 0.8B”，“两B -> 2B”，“一二三四五六七 -> 1234567”）；禁止词内替换（如“一些”不能变“1些”）。\n8. 输入为空、仅噪音或无有效内容时返回空字符串。\n\n示例：\n输入：我们第一点呢，要控糖；第二点要早睡；第三点要运动。\n输出：\n1. 要控糖。\n2. 要早睡。\n3. 要运动。\n\n输入：我们要做复盘，并且整理资料，而且同步进度。\n输出：\n- 我们要做复盘。\n- 我们要整理资料。\n- 我们要同步进度。\n\n输入：其实还不错吧，我不知道怎么处理，但是我们希望保持原意，不要删太多。\n输出：整体效果还不错，我暂时不确定最佳处理方式，但希望在保持原意前提下，不要删减过多细节。".to_string(),
+            prompt: "请将下面的转录文本做“中文口语整理”，不要翻译。\n\n输入：\n${output}\n\n输出目标：\n在不丢失信息的前提下，把口语转写整理为可直接阅读/粘贴的中文文本。\n\n执行规则（严格）：\n1. 仅输出最终文本，不要解释，不要输出“输入/规则/要求”等模板内容。\n2. 信息保真优先：不得增删事实、数字、时间、条件、否定、结论；不补充没说过的内容。\n3. 仅清理口语噪音：删除“嗯/啊/那个/就是”等语气词与机械重复；语义性重复保留。\n4. 结构化优先：\n   - 出现序号信号（第一/第二/第X/首先/其次/最后/1、2、3/第1点）时，必须输出有序列表（1. 2. 3.）。\n   - 出现两个及以上并列观点或动作（并且/而且/以及/另外/还有/同时/然后，或多个并列短分句）时，输出无序列表（-）。\n   - 若为连续叙述且无并列结构，输出自然段，不强行列表。\n5. 禁止过度精简：不要把多点信息压成一句空泛总结；列表项应保留关键细节。\n6. 专有名词、产品名、模型名、缩写、URL、代码、英文词保持原样。\n7. 数字规范：中文数字转阿拉伯数字，支持混写（如“三十2 -> 32”“1百五十四 -> 154”“零点8B/零点八B -> 0.8B”“两B -> 2B”）；禁止词内替换（如“一些”不能变“1些”）。\n8. 输入为空、仅噪音或无有效信息时返回空字符串。\n\n输出格式：\n- 只输出正文。\n- 不加标题，不加前缀。".to_string(),
         },
     ]
 }
@@ -873,6 +873,10 @@ fn is_legacy_default_chinese_markdown_prompt(value: &str) -> bool {
             == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要复述“要求/规则/输入”等模板内容。\n2. 保持原意与事实，去除口头重复和明显噪音；专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n3. 列表优先：若出现两个及以上并列观点，或含“第一点/第二点/另外/最后/1、2、3”等序列信号，必须输出 Markdown 有序列表（每点一行简短句）。\n4. 非列表场景输出一行简洁文本。\n5. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）；不要词内替换（例如“一些”不能变成“1些”）。"
         || trimmed
             == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要输出“要求/规则/输入”等模板文字。\n2. 保持原意，去口头重复和语气词；专有名词、产品名、模型名、缩写、URL、代码保持原样；中文数字按语义转阿拉伯数字（如“零点8B/零点八B -> 0.8B”，“两B -> 2B”），但不要词内替换（如“一些”不能变“1些”）。\n3. 列表优先：只要出现并列观点或序号信号（如“第一/第二/另外/最后/1、2、3/请列出/分点”），必须输出 Markdown 有序列表；否则输出一行简洁文本。\n\n示例：\n- 输入：第一点要控糖，第二点要早睡，第三点要运动。\n  输出：\n  1. 要控糖。\n  2. 要早睡。\n  3. 要运动。\n- 输入：嗯这个模型还可以吧。\n  输出：这个模型还可以。"
+        || trimmed
+            == "请将下面的转录文本整理成自然、清晰的中文，不要翻译。\n\n输入：\n${output}\n\n规则：\n1. 只输出最终结果，不要解释，不要复述“输入/规则/要求”等模板文字。\n2. 保留原意与关键信息（时间、数字、条件、结论），只删除口头禅、机械重复和明显噪音。\n3. 出现序号信号（第一/第二/第X/1、2、3）时，必须输出有序列表（1. 2. 3.）。\n4. 同一句或同一段存在两个及以上并列点，且有“并且/而且/以及/另外/还有/同时/然后”等连接词时，优先输出无序列表（-）。\n5. 中文数字转阿拉伯数字（如“三十2 -> 32”“1百五十四 -> 154”“零点8B -> 0.8B”“两B -> 2B”）；禁止词内替换（如“一些”不能变“1些”）。"
+        || trimmed
+            == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n目标：\n在不丢失信息的前提下，将口语转写整理为清晰、自然、可直接使用的中文；优先保证信息完整，再提升可读性。\n\n执行规则（严格）：\n1. 仅输出最终文本；禁止输出“输入/规则/要求”等模板内容，禁止解释。\n2. 信息保真优先：保留事实、时间、数量、条件、因果、否定、对比、结论；仅删除口头禅、机械重复和明显噪音（如“嗯/啊/那个/就是”）。\n3. 列表判定：\n   - 若出现序号信号（“第一/第二/第X/首先/其次/最后/1、2、3”），必须输出有序列表（1. 2. 3.）。\n   - 若出现并列信号（“并且/而且/以及/另外/还有/同时/然后”）且可拆为两个及以上独立事项，输出无序列表（-）。\n   - 若只是连续叙述且无独立并列事项，则保持段落，不强行列表。\n4. 列表项必须是完整短句（建议 8-28 字），可做轻度语法补全，但不得新增事实或改写立场。\n5. 禁止过度精简：不要把多点信息压成一句概括；除非原文本来极短，否则尽量保留细节层次。\n6. 专有名词、产品名、模型名、缩写、URL、代码、英文词保持原样。\n7. 数字规范：中文数字按语义转阿拉伯数字，支持混写形式（如“三十2 -> 32”“1百五十四 -> 154”），以及“零点八B/零点8B -> 0.8B”“两B -> 2B”“一二三四五六七 -> 1234567”；禁止词内替换（如“一些”不能变“1些”）。\n8. 输入为空、仅噪音或无有效内容时返回空字符串。\n\n示例：\n输入：我们第一点呢，要控糖；第二点要早睡；第三点要运动。\n输出：\n1. 要控糖。\n2. 要早睡。\n3. 要运动。\n\n输入：我们要做复盘，并且整理资料，而且同步进度。\n输出：\n- 我们要做复盘。\n- 我们要整理资料。\n- 我们要同步进度。\n\n输入：其实还不错吧，我不知道怎么处理，但是我们希望保持原意，不要删太多。\n输出：整体效果还不错，我暂时不确定最佳处理方式，但希望在保持原意前提下，不要删减过多细节。"
 }
 
 fn is_prunable_legacy_preset_prompt(prompt: &LLMPrompt) -> bool {
@@ -911,6 +915,10 @@ fn is_legacy_default_post_process_system_prompt(value: &str) -> bool {
             == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, bullet examples, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string."
         || trimmed
             == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Treat the selected user prompt template as instruction metadata; do not echo, paraphrase, or restate template rule lines.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string."
+        || trimmed
+            == "你是严格的中文转录后处理器。\n输出契约：\n1. 仅输出最终结果，不要解释。\n2. 严格遵循所选用户提示词模板；不要复述模板条款、要求、规则或输入标题。\n3. 禁止输出思考过程、分析、<think> 标签、包装语。\n4. 在不改变事实与结论的前提下，优先提升可读性与结构化表达。\n5. 若用户模板要求列表化：当出现并列/序列信号（如“并且、而且、同时、以及、另外、然后、第一/第二/第三、1、2、3、;、；”）时，必须使用 Markdown 列表。\n6. 专有名词、产品名、模型名、缩写、URL、代码、数字保持准确。\n7. 输入为空时返回空字符串。"
+        || trimmed
+            == "你是中文转录后处理器。\n只输出最终文本，不要解释，不要输出规则文本，不要输出 <think>。\n严格遵循用户提示词。\n保持原意、结论和关键数字准确。"
 }
 
 fn default_whisper_gpu_device() -> i32 {

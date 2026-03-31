@@ -249,6 +249,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
         <ModelStatusButton
           status={getDisplayStatus()}
           displayText={getModelDisplayText()}
+          label={t("footer.transcription.label")}
           isDropdownOpen={showModelDropdown}
           onClick={() => setShowModelDropdown(!showModelDropdown)}
         />

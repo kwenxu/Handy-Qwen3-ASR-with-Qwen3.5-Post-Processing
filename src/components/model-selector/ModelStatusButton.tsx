@@ -13,6 +13,7 @@ type ModelStatus =
 interface ModelStatusButtonProps {
   status: ModelStatus;
   displayText: string;
+  label?: string;
   isDropdownOpen: boolean;
   onClick: () => void;
   className?: string;
@@ -21,6 +22,7 @@ interface ModelStatusButtonProps {
 const ModelStatusButton: React.FC<ModelStatusButtonProps> = ({
   status,
   displayText,
+  label,
   isDropdownOpen,
   onClick,
   className = "",
@@ -52,10 +54,13 @@ const ModelStatusButton: React.FC<ModelStatusButtonProps> = ({
     <button
       onClick={onClick}
       className={`flex items-center gap-2 hover:text-text/80 transition-colors ${className}`}
-      title={`Model status: ${displayText}`}
+      title={`Model status: ${label ? `${label}: ${displayText}` : displayText}`}
     >
       <div className={`w-2 h-2 rounded-full ${getStatusColor(status)}`} />
-      <span className="max-w-28 truncate">{displayText}</span>
+      {label ? <span className="shrink-0">{label}:</span> : null}
+      <span className={`${label ? "max-w-24" : "max-w-28"} truncate`}>
+        {displayText}
+      </span>
       <svg
         className={`w-3 h-3 transition-transform ${isDropdownOpen ? "rotate-180" : ""}`}
         fill="none"

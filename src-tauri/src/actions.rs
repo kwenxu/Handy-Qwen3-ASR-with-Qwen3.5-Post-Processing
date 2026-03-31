@@ -176,6 +176,130 @@ fn is_list_separator_char(ch: char) -> bool {
     matches!(ch, '、' | ',' | '，' | ';' | '；' | ':' | '：' | '/' | '／')
 }
 
+fn is_chinese_unit_char(ch: char) -> bool {
+    matches!(ch, '十' | '百' | '千' | '万' | '萬')
+}
+
+fn is_mixed_number_token_char(ch: char) -> bool {
+    is_chinese_digit_char(ch) || ch.is_ascii_digit() || is_chinese_unit_char(ch)
+}
+
+fn chinese_or_ascii_digit_value(ch: char) -> Option<i64> {
+    if ch.is_ascii_digit() {
+        return Some((ch as u8 - b'0') as i64);
+    }
+    chinese_digit_to_arabic(ch).and_then(|mapped| mapped.to_digit(10).map(i64::from))
+}
+
+fn chinese_unit_value(ch: char) -> Option<i64> {
+    match ch {
+        '十' => Some(10),
+        '百' => Some(100),
+        '千' => Some(1000),
+        '万' | '萬' => Some(10000),
+        _ => None,
+    }
+}
+
+fn parse_mixed_chinese_unit_number(token: &[char]) -> Option<i64> {
+    if token.is_empty() {
+        return None;
+    }
+
+    let mut total = 0i64;
+    let mut section = 0i64;
+    let mut number: Option<i64> = None;
+    let mut saw_digit = false;
+    let mut saw_unit = false;
+
+    for ch in token {
+        if let Some(v) = chinese_or_ascii_digit_value(*ch) {
+            number = Some(v);
+            saw_digit = true;
+            continue;
+        }
+        if let Some(unit) = chinese_unit_value(*ch) {
+            saw_unit = true;
+            if unit == 10000 {
+                let n = number.take().unwrap_or(0);
+                let sec = section + n;
+                if sec == 0 {
+                    return None;
+                }
+                total += sec * unit;
+                section = 0;
+                continue;
+            }
+            let n = number.take().unwrap_or(1);
+            section += n * unit;
+            continue;
+        }
+        return None;
+    }
+
+    if !saw_digit || !saw_unit {
+        return None;
+    }
+
+    Some(total + section + number.unwrap_or(0))
+}
+
+fn normalize_mixed_chinese_unit_numbers_to_arabic(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if !is_mixed_number_token_char(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        while i < chars.len() && is_mixed_number_token_char(chars[i]) {
+            i += 1;
+        }
+        let end = i;
+        let token = &chars[start..end];
+
+        let has_unit = token.iter().any(|ch| is_chinese_unit_char(*ch));
+        if !has_unit {
+            for ch in token {
+                out.push(*ch);
+            }
+            continue;
+        }
+
+        let prev = if start > 0 {
+            chars.get(start - 1).copied()
+        } else {
+            None
+        };
+        let next = chars.get(end).copied();
+        let touches_ascii_word = prev
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+            || next.is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'));
+        if touches_ascii_word {
+            for ch in token {
+                out.push(*ch);
+            }
+            continue;
+        }
+
+        if let Some(value) = parse_mixed_chinese_unit_number(token) {
+            out.push_str(&value.to_string());
+            continue;
+        }
+
+        for ch in token {
+            out.push(*ch);
+        }
+    }
+
+    out
+}
+
 fn normalize_model_size_tokens_with_b_unit(input: &str) -> String {
     fn parse_digit_char(ch: char) -> Option<char> {
         if ch.is_ascii_digit() {
@@ -495,6 +619,7 @@ fn normalize_post_process_candidate(
     cleaned = strip_prompt_template_leakage(&cleaned, prompt_template);
     cleaned = collapse_repeated_lines(&cleaned);
     if force_arabic_digits {
+        cleaned = normalize_mixed_chinese_unit_numbers_to_arabic(&cleaned);
         cleaned = normalize_standalone_chinese_digits_to_arabic(&cleaned);
     }
     cleaned.trim().to_string()
@@ -1398,8 +1523,8 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_post_process_candidate, normalize_standalone_chinese_digits_to_arabic,
-        template_requests_arabic_digits,
+        normalize_mixed_chinese_unit_numbers_to_arabic, normalize_post_process_candidate,
+        normalize_standalone_chinese_digits_to_arabic, template_requests_arabic_digits,
     };
 
     #[test]
@@ -1432,6 +1557,20 @@ mod tests {
         let input = "零点8 B、零点八B、两 B、幺234、4 B、9 B。";
         let output = normalize_standalone_chinese_digits_to_arabic(input);
         assert_eq!(output, "0.8B、0.8B、2B、1234、4B、9B。");
+    }
+
+    #[test]
+    fn converts_mixed_chinese_unit_numbers() {
+        let input = "三十2、1百五十四、十二、两百零三。";
+        let output = normalize_mixed_chinese_unit_numbers_to_arabic(input);
+        assert_eq!(output, "32、154、12、203。");
+    }
+
+    #[test]
+    fn keeps_non_numeric_unit_phrase() {
+        let input = "千万不要，一百五十四要转换。";
+        let output = normalize_mixed_chinese_unit_numbers_to_arabic(input);
+        assert_eq!(output, "千万不要，154要转换。");
     }
 
     #[test]

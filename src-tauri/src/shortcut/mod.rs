@@ -39,6 +39,17 @@ const DEFAULT_LLM_SCRIPT_FILE: &str = "llm_post_hook.py";
 const DESKTOP_EXPORT_ASR_SCRIPT_FILE: &str = "Handy-asr-post-script.py";
 const DESKTOP_EXPORT_LLM_SCRIPT_FILE: &str = "Handy-llm-post-script.py";
 const DEFAULT_ASR_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
+# Handy external script template (stage: asr_post)
+# How APP runs scripts:
+# - .py           -> python3 <script_path>
+# - .js/.mjs/.cjs -> node <script_path>
+# - .sh           -> bash <script_path>
+# - other suffix  -> run directly as executable (e.g. Rust compiled binary)
+#
+# stdin:  one JSON line
+#   {"stage":"asr_post|llm_post","text":"...","lang":"...","model_id":"...","metadata":{...}}
+# stdout: plain text OR JSON {"text":"..."} (recommended)
+# fallback: timeout / error / invalid output -> APP falls back to original text
 import json
 import sys
 
@@ -50,9 +61,21 @@ def main() -> None:
         return
 
     data = json.loads(raw)
+    stage = str(data.get("stage", ""))
     text = str(data.get("text", ""))
+    # lang = data.get("lang")
+    # model_id = data.get("model_id")
+    # metadata = data.get("metadata", {})
+
+    # Keep stage guard so one file can be safely reused in both stages.
+    if stage != "asr_post":
+        print(json.dumps({"text": text}, ensure_ascii=False))
+        return
 
     # TODO: customize ASR-stage cleanup rules here.
+    # Example:
+    # text = text.replace("嗯", "").replace("啊", "")
+
     print(json.dumps({"text": text}, ensure_ascii=False))
 
 
@@ -60,6 +83,8 @@ if __name__ == "__main__":
     main()
 "#;
 const DEFAULT_LLM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
+# Handy external script template (stage: llm_post)
+# See the ASR template header for runner mapping and protocol details.
 import json
 import sys
 
@@ -71,9 +96,21 @@ def main() -> None:
         return
 
     data = json.loads(raw)
+    stage = str(data.get("stage", ""))
     text = str(data.get("text", ""))
+    # prompt_id = data.get("prompt_id")
+    # system_prompt = data.get("system_prompt")
+    # user_prompt_template = data.get("user_prompt_template")
+    # metadata = data.get("metadata", {})
+
+    if stage != "llm_post":
+        print(json.dumps({"text": text}, ensure_ascii=False))
+        return
 
     # TODO: customize LLM-stage post-cleaning rules here.
+    # Example (template leakage cleanup):
+    # text = text.replace("要求：", "").replace("规则：", "")
+
     print(json.dumps({"text": text}, ensure_ascii=False))
 
 
