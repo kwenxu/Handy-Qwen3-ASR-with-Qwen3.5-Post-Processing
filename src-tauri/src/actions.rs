@@ -114,6 +114,23 @@ fn clean_post_process_output(s: &str) -> String {
     out.trim().to_string()
 }
 
+fn preview_for_log(text: &str, max_chars: usize) -> String {
+    let normalized = text.replace('\n', "\\n");
+    let mut iter = normalized.chars();
+    let mut preview = String::new();
+    for _ in 0..max_chars {
+        if let Some(ch) = iter.next() {
+            preview.push(ch);
+        } else {
+            break;
+        }
+    }
+    if iter.next().is_some() {
+        preview.push('…');
+    }
+    preview
+}
+
 fn template_requests_arabic_digits(prompt_template: &str) -> bool {
     let lowered = prompt_template.to_ascii_lowercase();
     lowered.contains("arabic digit")
@@ -760,6 +777,13 @@ async fn post_process_transcription(
     let quality_params = local_generation_params_from_settings(settings);
     let force_arabic_digits = template_requests_arabic_digits(&prompt);
     let prompt_template_for_post = prompt.clone();
+    debug!(
+        "Post-process request prepared: provider='{}', model='{}', source_len={}, prompt_id='{}'",
+        provider.id,
+        model,
+        transcription_text.len(),
+        selected_prompt_id
+    );
 
     if provider.id == LOCAL_QWEN35_PROVIDER_ID {
         let manager = app.state::<Arc<Qwen35PostManager>>().inner().clone();
@@ -772,7 +796,6 @@ async fn post_process_transcription(
         let local_system_prompt = system_prompt.clone();
         let local_force_arabic_digits = force_arabic_digits;
         let local_prompt_template = prompt_template_for_post.clone();
-
         return match tauri::async_runtime::spawn_blocking(move || {
             debug!(
                 "Local Qwen3.5 params => max_tokens={}, temperature={}, top_p={}, repetition_penalty={}, repetition_context_size={}",
@@ -799,6 +822,12 @@ async fn post_process_transcription(
                 &first,
                 &local_prompt_template,
                 local_force_arabic_digits,
+            );
+            debug!(
+                "Local Qwen3.5 first pass: raw_len={}, clean_len={}, clean_preview='{}'",
+                first.len(),
+                first_clean.len(),
+                preview_for_log(&first_clean, 120)
             );
 
             if !should_reject_post_output(&first_clean, &local_prompt_template) {
@@ -830,6 +859,12 @@ async fn post_process_transcription(
                 &local_prompt_template,
                 local_force_arabic_digits,
             );
+            debug!(
+                "Local Qwen3.5 second pass: raw_len={}, clean_len={}, clean_preview='{}'",
+                second.len(),
+                second_clean.len(),
+                preview_for_log(&second_clean, 120)
+            );
             if !should_reject_post_output(&second_clean, &local_prompt_template) {
                 return Ok(second_clean);
             }
@@ -852,8 +887,9 @@ async fn post_process_transcription(
                     None
                 } else {
                     debug!(
-                        "Local Qwen3.5 post-processing succeeded. Output length: {} chars",
-                        result.len()
+                        "Local Qwen3.5 post-processing succeeded. Output length: {} chars, preview='{}'",
+                        result.len(),
+                        preview_for_log(&result, 120)
                     );
                     Some(result)
                 }

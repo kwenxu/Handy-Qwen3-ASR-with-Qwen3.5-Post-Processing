@@ -1,6 +1,6 @@
 use natural::phonetics::soundex;
 use once_cell::sync::Lazy;
-use regex::Regex;
+use regex::{Captures, Regex};
 use strsim::levenshtein;
 
 /// Builds an n-gram string by cleaning and concatenating words
@@ -230,6 +230,31 @@ fn get_filler_words_for_language(lang: &str) -> &'static [&'static str] {
 }
 
 static MULTI_SPACE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s{2,}").unwrap());
+static ZH_LATIN_A_NOISE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?P<lead>^|[\s,，。.!！？?；;：、])(?P<noise>a{2,}|a[-—~!！?？]+)(?P<trail>$|[\s,，。.!！？?；;：、])",
+    )
+    .unwrap()
+});
+
+fn remove_chinese_latin_noise_tokens(text: &str, lang: &str) -> String {
+    let base_lang = lang.split(&['-', '_'][..]).next().unwrap_or(lang);
+    if base_lang != "zh" {
+        return text.to_string();
+    }
+
+    ZH_LATIN_A_NOISE_PATTERN
+        .replace_all(text, |caps: &Captures| {
+            let lead = caps.name("lead").map_or("", |m| m.as_str());
+            let trail = caps.name("trail").map_or("", |m| m.as_str());
+            if lead.ends_with(char::is_whitespace) && trail.starts_with(char::is_whitespace) {
+                " ".to_string()
+            } else {
+                format!("{}{}", lead, trail)
+            }
+        })
+        .to_string()
+}
 
 /// Collapses repeated 1-2 letter words (3+ repetitions) to a single instance.
 /// E.g., "wh wh wh wh" -> "wh", "I I I I" -> "I"
@@ -309,6 +334,10 @@ pub fn filter_transcription_output(
     for pattern in &patterns {
         filtered = pattern.replace_all(&filtered, "").to_string();
     }
+
+    // For Chinese UI language, drop common Latin "a/aa/a!" style noise tokens
+    // emitted by ASR when interjections are misrecognized.
+    filtered = remove_chinese_latin_noise_tokens(&filtered, lang);
 
     // Collapse repeated 1-2 letter words (stutter artifacts like "wh wh wh wh")
     filtered = collapse_stutters(&filtered);
@@ -500,6 +529,27 @@ mod tests {
         let text = "um I think this works";
         let result = filter_transcription_output(text, "xx", &None);
         assert_eq!(result, "um I think this works");
+    }
+
+    #[test]
+    fn test_filter_zh_removes_repeated_a_noise_token() {
+        let text = "这个 aa 真的很怪";
+        let result = filter_transcription_output(text, "zh", &None);
+        assert_eq!(result, "这个 真的很怪");
+    }
+
+    #[test]
+    fn test_filter_zh_removes_a_with_punctuation_noise() {
+        let text = "这个 a! 太怪了";
+        let result = filter_transcription_output(text, "zh", &None);
+        assert_eq!(result, "这个 太怪了");
+    }
+
+    #[test]
+    fn test_filter_zh_keeps_uppercase_a_token() {
+        let text = "这是 A 股，不要删";
+        let result = filter_transcription_output(text, "zh", &None);
+        assert_eq!(result, "这是 A 股，不要删");
     }
 
     #[test]

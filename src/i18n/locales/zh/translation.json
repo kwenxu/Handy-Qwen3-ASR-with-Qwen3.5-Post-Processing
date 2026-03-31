@@ -680,7 +680,8 @@
             "success": "{{stage}} 执行成功，耗时 {{ms}}ms · {{path}}"
           },
           "stageImportSuccess": "脚本已导入并启用：{{path}}",
-          "stageExportSuccess": "脚本已导出到桌面：{{path}}"
+          "stageExportSuccess": "脚本已导出到桌面：{{path}}",
+          "stageRestoreSuccess": "{{stage}} 已恢复默认模板：{{path}}"
         }
       },
       "prompts": {

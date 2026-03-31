@@ -126,6 +126,13 @@ pub fn run_script_hook(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    debug!(
+        "script hook ({}) starting: path='{}', input_len={}, timeout_ms={}",
+        stage.as_str(),
+        normalized_path,
+        input_text.len(),
+        timeout.as_millis()
+    );
 
     let mut child = command
         .spawn()
@@ -200,6 +207,12 @@ pub fn run_script_hook(
                 normalized_path
             ));
         }
+        debug!(
+            "script hook ({}) finished with JSON output: path='{}', output_len={}",
+            stage.as_str(),
+            normalized_path,
+            parsed.text.trim().len()
+        );
         if !parsed.warnings.is_empty() {
             warn!(
                 "script hook '{}' warnings: {}",
@@ -211,8 +224,10 @@ pub fn run_script_hook(
     }
 
     debug!(
-        "script hook '{}' returned plain text (non-JSON); accepting raw output",
-        normalized_path
+        "script hook ({}) finished with plain text output: path='{}', output_len={}",
+        stage.as_str(),
+        normalized_path,
+        stdout_text.len()
     );
     Ok(stdout_text)
 }

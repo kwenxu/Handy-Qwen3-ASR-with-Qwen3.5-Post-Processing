@@ -680,7 +680,8 @@
             "success": "{{stage}} succeeded in {{ms}}ms · {{path}}"
           },
           "stageImportSuccess": "Script imported and activated: {{path}}",
-          "stageExportSuccess": "Script exported to Desktop: {{path}}"
+          "stageExportSuccess": "Script exported to Desktop: {{path}}",
+          "stageRestoreSuccess": "{{stage}} restored from default template: {{path}}"
         }
       },
       "prompts": {

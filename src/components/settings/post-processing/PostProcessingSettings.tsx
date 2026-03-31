@@ -545,7 +545,6 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
   const showAsrStage = scope === "all" || scope === "asr";
   const showLlmStage = scope === "all" || scope === "llm";
   const showGlobalSection = scope !== "llm";
-  const showTemplateSection = scope !== "asr";
   const defaultSampleInput =
     scope === "asr"
       ? t("settings.postProcessing.api.scriptHooks.test.defaultInputAsr")
@@ -632,30 +631,26 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
     }
   };
 
-  const applyTemplatePaths = async (
-    postAsrPath: string,
-    postLlmPath: string,
-  ) => {
-    await updateSetting("post_asr_script_path", postAsrPath);
-    await updateSetting("post_llm_script_path", postLlmPath);
-    setPostAsrScriptPathDraft(postAsrPath);
-    setPostLlmScriptPathDraft(postLlmPath);
-  };
-
-  const handleRestoreTemplates = async () => {
+  const handleRestoreStageScript = async (stage: ScriptStage) => {
+    const stageLabelKey =
+      stage === "asr_post"
+        ? "settings.postProcessing.api.scriptHooks.postAsrPath.title"
+        : "settings.postProcessing.api.scriptHooks.postLlmPath.title";
     setIsRestoringTemplates(true);
     setStatusMessage(null);
     try {
       const result = await commands.restoreDefaultScriptHookTemplates();
       if (result.status === "ok") {
-        await applyTemplatePaths(
-          result.data.post_asr_script_path,
-          result.data.post_llm_script_path,
-        );
+        const restoredPath =
+          stage === "asr_post"
+            ? result.data.post_asr_script_path
+            : result.data.post_llm_script_path;
+        await applyImportedStagePath(stage, restoredPath);
         setStatusMessage({
           variant: "success",
-          text: t("settings.postProcessing.api.scriptHooks.templates.restoreSuccess", {
-            dir: result.data.directory,
+          text: t("settings.postProcessing.api.scriptHooks.stageRestoreSuccess", {
+            stage: t(stageLabelKey),
+            path: restoredPath,
           }),
         });
       } else {
@@ -829,7 +824,7 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
           layout="horizontal"
           grouped={true}
         >
-          <div className="flex items-center gap-2">
+          <div className="space-y-2">
             <Input
               type="text"
               value={postAsrScriptPathDraft}
@@ -847,26 +842,38 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
               disabled={isUpdating("post_asr_script_path")}
               className="min-w-[320px]"
             />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={isImportingAsr || isExportingAsr}
-              onClick={() => {
-                void handleImportStageScript("asr_post");
-              }}
-            >
-              {t("settings.postProcessing.api.scriptHooks.postAsrPath.importButton")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={isImportingAsr || isExportingAsr}
-              onClick={() => {
-                void handleExportStageScript("asr_post");
-              }}
-            >
-              {t("settings.postProcessing.api.scriptHooks.postAsrPath.exportButton")}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingAsr || isExportingAsr || isRestoringTemplates}
+                onClick={() => {
+                  void handleImportStageScript("asr_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.postAsrPath.importButton")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingAsr || isExportingAsr || isRestoringTemplates}
+                onClick={() => {
+                  void handleExportStageScript("asr_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.postAsrPath.exportButton")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingAsr || isExportingAsr || isRestoringTemplates}
+                onClick={() => {
+                  void handleRestoreStageScript("asr_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.templates.restoreButton")}
+              </Button>
+            </div>
           </div>
         </SettingContainer>
       )}
@@ -881,7 +888,7 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
           layout="horizontal"
           grouped={true}
         >
-          <div className="flex items-center gap-2">
+          <div className="space-y-2">
             <Input
               type="text"
               value={postLlmScriptPathDraft}
@@ -899,26 +906,38 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
               disabled={isUpdating("post_llm_script_path")}
               className="min-w-[320px]"
             />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={isImportingLlm || isExportingLlm}
-              onClick={() => {
-                void handleImportStageScript("llm_post");
-              }}
-            >
-              {t("settings.postProcessing.api.scriptHooks.postLlmPath.importButton")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={isImportingLlm || isExportingLlm}
-              onClick={() => {
-                void handleExportStageScript("llm_post");
-              }}
-            >
-              {t("settings.postProcessing.api.scriptHooks.postLlmPath.exportButton")}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingLlm || isExportingLlm || isRestoringTemplates}
+                onClick={() => {
+                  void handleImportStageScript("llm_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.postLlmPath.importButton")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingLlm || isExportingLlm || isRestoringTemplates}
+                onClick={() => {
+                  void handleExportStageScript("llm_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.postLlmPath.exportButton")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isImportingLlm || isExportingLlm || isRestoringTemplates}
+                onClick={() => {
+                  void handleRestoreStageScript("llm_post");
+                }}
+              >
+                {t("settings.postProcessing.api.scriptHooks.templates.restoreButton")}
+              </Button>
+            </div>
           </div>
         </SettingContainer>
       )}
@@ -971,30 +990,6 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
               i18nKey="settings.postProcessing.api.scriptHooks.protocol.tip"
               components={{ code: <code /> }}
             />
-          </p>
-        </SettingContainer>
-      )}
-
-      {showTemplateSection && (
-        <SettingContainer
-          title={t("settings.postProcessing.api.scriptHooks.templates.title")}
-          description={t("settings.postProcessing.api.scriptHooks.templates.description")}
-          descriptionMode="tooltip"
-          layout="stacked"
-          grouped={true}
-        >
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={handleRestoreTemplates}
-              variant="secondary"
-              size="md"
-              disabled={isRestoringTemplates}
-            >
-              {t("settings.postProcessing.api.scriptHooks.templates.restoreButton")}
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-mid-gray/70">
-            {t("settings.postProcessing.api.scriptHooks.templates.hint")}
           </p>
         </SettingContainer>
       )}
