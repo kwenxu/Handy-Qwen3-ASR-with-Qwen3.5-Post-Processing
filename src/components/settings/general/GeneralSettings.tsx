@@ -20,7 +20,7 @@ export const GeneralSettings: React.FC = () => {
   const postProcessEnabled = getSetting("post_process_enabled") || false;
   const isLinux = type() === "linux";
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
+    <div className="max-w-4xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
         <PushToTalk descriptionMode="tooltip" grouped={true} />

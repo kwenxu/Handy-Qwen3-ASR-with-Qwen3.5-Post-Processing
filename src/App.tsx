@@ -51,6 +51,30 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleNavigateSection = (
+      event: Event,
+    ) => {
+      const detail = (event as CustomEvent<{ section?: SidebarSection }>)
+        .detail;
+      const requestedSection = detail?.section;
+      if (!requestedSection) return;
+      if (!SECTIONS_CONFIG[requestedSection]) return;
+      setCurrentSection(requestedSection);
+    };
+
+    window.addEventListener(
+      "handy:navigate-section",
+      handleNavigateSection as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "handy:navigate-section",
+        handleNavigateSection as EventListener,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     const activeConfig = SECTIONS_CONFIG[currentSection];
     if (activeConfig && !activeConfig.enabled(settings)) {
       setCurrentSection("general");

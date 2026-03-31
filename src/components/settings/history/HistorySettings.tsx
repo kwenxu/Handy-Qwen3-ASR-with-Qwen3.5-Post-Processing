@@ -271,7 +271,7 @@ export const HistorySettings: React.FC = () => {
   }
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
+    <div className="max-w-4xl w-full mx-auto space-y-6">
       <div className="space-y-2">
         <div className="px-4 flex items-center justify-between">
           <div>

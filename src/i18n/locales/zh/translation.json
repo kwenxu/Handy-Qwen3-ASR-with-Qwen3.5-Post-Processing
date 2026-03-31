@@ -358,8 +358,61 @@
     "performance": {
       "title": "性能",
       "groups": {
-        "transcription": "转录模型性能",
-        "postProcessing": "后处理模型性能"
+        "pipeline": "流程总览与 APP 处理脚本",
+        "transcription": "阶段 A · 转录模型",
+        "postProcessing": "阶段 B · 后处理模型"
+      },
+      "pipeline": {
+        "title": "运行流程图（模型阶段 vs APP 脚本阶段）",
+        "description": "展示哪些步骤由模型执行，哪些步骤由本地 APP 脚本执行。APP 脚本阶段包含内置保守兜底与可编辑的外部脚本。",
+        "legend": {
+          "model": "模型阶段",
+          "app": "APP 脚本阶段",
+          "io": "输入 / 输出"
+        },
+        "steps": {
+          "input": {
+            "title": "用户语音输入",
+            "description": "从麦克风采集语音。"
+          },
+          "transcriptionModel": {
+            "title": "转录模型",
+            "description": "Qwen / Whisper 将语音转为原始文本。"
+          },
+          "asrAppScript": {
+            "title": "APP 处理脚本（转录后）",
+            "description": "内置兜底 + 可选外部脚本，用于转录阶段文本整理。"
+          },
+          "postProcessModel": {
+            "title": "后处理模型",
+            "description": "应用系统提示词、用户模板和生成参数。"
+          },
+          "llmAppScript": {
+            "title": "APP 处理脚本（后处理模型后）",
+            "description": "内置兜底 + 可选外部脚本，用于最终文本整理。"
+          },
+          "output": {
+            "title": "最终文本输出",
+            "description": "结果进入粘贴与历史记录流程。"
+          }
+        }
+      },
+      "scriptBlocks": {
+        "asr": {
+          "title": "步骤 3 · APP 处理脚本（转录后）",
+          "description": "配置“转录后脚本阶段”的脚本路径、导入导出与测试。"
+        },
+        "llm": {
+          "title": "步骤 5 · APP 处理脚本（后处理模型后）",
+          "description": "配置“后处理模型后脚本阶段”的脚本路径、导入导出与测试。"
+        }
+      },
+      "outputStage": {
+        "title": "步骤 6 · 最终输出",
+        "description": "文本经过模型与 APP 脚本阶段后，进入粘贴与历史记录流程。",
+        "noteTitle": "最终输出说明",
+        "noteDescription": "此阶段主要受输出与历史记录配置控制。",
+        "note": "若需调整粘贴行为、剪贴板策略或历史保留，请在高级/历史页面配置。"
       },
       "adaptiveIdle": {
         "title": "空闲释放策略（阶梯）",
@@ -390,13 +443,13 @@
         "postProcessHint": "后处理模型：会在后处理触发时兜底补热，不再保留启动常驻预热。"
       },
       "qwenTranscription": {
-        "title": "Qwen 转录运行时（2 款模型）",
+        "title": "模型阶段：Qwen 转录运行时（2 款模型）",
         "description": "针对 Qwen3-ASR-0.6B 与 1.7B 的本地运行时性能路径。",
         "hint": "优先复用本机兼容 Python（>=3.11）；若不可用则自动回退到内置 uv + .venv。Python 依赖源采用镜像优先并自动回退。"
       },
       "whisperExperimental": "Whisper 加速（实验）",
       "qwenPanel": {
-        "title": "千问性能子面板",
+        "title": "模型阶段：Qwen 后处理运行时",
         "strategy": {
           "title": "启动加载策略",
           "description": "控制 Qwen 转录与后处理模型在应用启动时的加载并发方式。",
@@ -536,6 +589,58 @@
           "placeholderWithOptions": "搜索或选择模型",
           "placeholderNoOptions": "输入模型名称",
           "refreshModels": "刷新模型"
+        },
+        "scriptHooks": {
+          "title": "APP 处理脚本（极客）",
+          "enabled": {
+            "title": "启用 APP 处理脚本",
+            "description": "在配置阶段执行本地 APP 处理脚本。关闭后将跳过这些脚本阶段。"
+          },
+          "postAsrPath": {
+            "title": "APP 脚本路径：转录后",
+            "description": "在转录模型输出并完成基础过滤后执行。留空则跳过该 APP 阶段。",
+            "placeholder": "/Users/you/hooks/asr_post.py",
+            "importButton": "导入脚本",
+            "exportButton": "导出到桌面"
+          },
+          "postLlmPath": {
+            "title": "APP 脚本路径：后处理模型后",
+            "description": "在后处理模型返回文本后执行。留空则跳过该 APP 阶段。",
+            "placeholder": "/Users/you/hooks/llm_post.py",
+            "importButton": "导入脚本",
+            "exportButton": "导出到桌面"
+          },
+          "timeout": {
+            "title": "脚本超时（毫秒）",
+            "description": "单次脚本执行最大等待时间，范围 100-10000 毫秒。"
+          },
+          "protocol": {
+            "title": "APP 脚本输入输出协议",
+            "description": "每次执行会通过 stdin 传入一行 JSON；脚本应在 stdout 返回纯文本或 JSON。",
+            "contract": "stdin JSON：{\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout JSON（推荐）：{\"text\":\"...\"}\nstdout 纯文本：...",
+            "tip": "可用 <code>stage</code> 区分“转录后脚本阶段”和“后处理后脚本阶段”。脚本非零退出、超时或输出无效时会自动回退到原文本。"
+          },
+          "templates": {
+            "title": "默认模板",
+            "description": "将内置脚本模板导出到应用数据目录，或恢复为默认模板。",
+            "exportButton": "导出模板",
+            "restoreButton": "恢复默认模板",
+            "hint": "导出仅在文件缺失时写入；恢复会覆盖已有模板文件。",
+            "exportSuccess": "模板导出完成。目录：{{dir}}",
+            "restoreSuccess": "模板已恢复为默认。目录：{{dir}}"
+          },
+          "test": {
+            "title": "脚本测试",
+            "description": "对 ASR 阶段或后处理阶段手动执行一次真实脚本调用，并查看输出结果。",
+            "inputLabel": "测试输入",
+            "inputPlaceholder": "输入任意示例文本用于测试脚本替换...",
+            "asrButton": "测试脚本：转录后",
+            "llmButton": "测试脚本：后处理模型后",
+            "outputLabel": "脚本输出",
+            "success": "{{stage}} 执行成功，耗时 {{ms}}ms · {{path}}"
+          },
+          "stageImportSuccess": "脚本已导入并启用：{{path}}",
+          "stageExportSuccess": "脚本已导出到桌面：{{path}}"
         }
       },
       "prompts": {

@@ -421,6 +421,14 @@ pub struct AppSettings {
     pub qwen35_server_ready_timeout_sec: u64,
     #[serde(default = "default_qwen35_inference_timeout_sec")]
     pub qwen35_inference_timeout_sec: u64,
+    #[serde(default = "default_script_hooks_enabled")]
+    pub script_hooks_enabled: bool,
+    #[serde(default)]
+    pub post_asr_script_path: Option<String>,
+    #[serde(default)]
+    pub post_llm_script_path: Option<String>,
+    #[serde(default = "default_script_hook_timeout_ms")]
+    pub script_hook_timeout_ms: u64,
     #[serde(default)]
     pub mute_while_recording: bool,
     #[serde(default)]
@@ -528,7 +536,7 @@ fn default_post_process_enabled() -> bool {
 }
 
 fn default_post_process_system_prompt() -> String {
-    "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Treat the selected user prompt template as instruction metadata; do not echo, paraphrase, or restate template rule lines.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string.".to_string()
+    "你是严格的中文转录后处理器。\n输出契约：\n1. 仅输出最终结果，不要解释。\n2. 严格遵循所选用户提示词模板；不要复述模板条款、要求、规则或输入标题。\n3. 禁止输出思考过程、分析、<think> 标签、包装语。\n4. 在不改变事实与结论的前提下，优先提升可读性与结构化表达。\n5. 若用户模板要求列表化：当出现并列/序列信号（如“并且、而且、同时、以及、另外、然后、第一/第二/第三、1、2、3、;、；”）时，必须使用 Markdown 列表。\n6. 专有名词、产品名、模型名、缩写、URL、代码、数字保持准确。\n7. 输入为空时返回空字符串。".to_string()
 }
 
 fn default_post_process_quality() -> String {
@@ -628,6 +636,14 @@ fn default_qwen35_inference_timeout_sec() -> u64 {
     45
 }
 
+fn default_script_hooks_enabled() -> bool {
+    false
+}
+
+fn default_script_hook_timeout_ms() -> u64 {
+    1200
+}
+
 fn normalize_post_process_local_max_tokens(value: usize) -> usize {
     value.clamp(64, 512)
 }
@@ -681,6 +697,10 @@ pub fn normalize_qwen35_server_ready_timeout_sec(value: u64) -> u64 {
 
 pub fn normalize_qwen35_inference_timeout_sec(value: u64) -> u64 {
     value.clamp(5, 180)
+}
+
+pub fn normalize_script_hook_timeout_ms(value: u64) -> u64 {
+    value.clamp(100, 10_000)
 }
 
 fn default_app_language() -> String {
@@ -825,7 +845,7 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         LLMPrompt {
             id: "template_chinese_markdown_polish".to_string(),
             name: "中文口语整理（Markdown）".to_string(),
-            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要输出“要求/规则/输入”等模板文字。\n2. 保持原意，去口头重复和语气词；专有名词、产品名、模型名、缩写、URL、代码保持原样；中文数字按语义转阿拉伯数字（如“零点8B/零点八B -> 0.8B”，“两B -> 2B”），但不要词内替换（如“一些”不能变“1些”）。\n3. 列表优先：只要出现并列观点或序号信号（如“第一/第二/另外/最后/1、2、3/请列出/分点”），必须输出 Markdown 有序列表；否则输出一行简洁文本。\n\n示例：\n- 输入：第一点要控糖，第二点要早睡，第三点要运动。\n  输出：\n  1. 要控糖。\n  2. 要早睡。\n  3. 要运动。\n- 输入：嗯这个模型还可以吧。\n  输出：这个模型还可以。".to_string(),
+            prompt: "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n目标：\n把口语化表达整理成清晰、简洁、可读的文本，不改变原意。\n\n规则：\n1. 只输出最终结果，不解释，不复述模板文字。\n2. 列表优先：当出现并列或序列关系时，必须转成 Markdown 列表。\n   - 若出现“第一/第二/第三/首先/其次/最后/1、2、3”等明确序号，输出有序列表（1. 2. 3.）。\n   - 若出现“并且/而且/同时/以及/另外/还有/然后/并”等并列连接词且包含 2 个及以上分句，输出无序列表（-）。\n3. 非列表场景输出一行简洁文本。\n4. 去口头重复与语气词；专有名词、产品名、模型名、缩写、URL、代码、数字保持准确；中文数字按语义可转阿拉伯数字（如“零点8B/零点八B -> 0.8B”，“两B -> 2B”），但禁止词内替换（如“一些”不能变“1些”）。\n\n示例：\n输入：我们第一点呢，要控糖；第二点呢，要早睡；第三点要运动。\n输出：\n1. 要控糖。\n2. 要早睡。\n3. 要运动。\n\n输入：我们还要做复盘，并且整理资料，而且同步进度。\n输出：\n- 做复盘。\n- 整理资料。\n- 同步进度。".to_string(),
         },
     ]
 }
@@ -847,6 +867,8 @@ fn is_legacy_default_chinese_markdown_prompt(value: &str) -> bool {
             == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 保持原意与事实，不新增信息，不改变结论。\n2. 去除口头重复、语气词和明显噪音，让表达更简洁。\n3. 专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n4. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）。不要把词内字符误替换（例如“一些”不能变成“1些”）。\n5. 如内容包含“第一点/第二点/第X点/1、2、3”等并列结构，输出为 Markdown 列表；否则输出一行简洁文本。\n6. 禁止输出本模板条款本身（例如“1. 保持原意与事实...”这类说明文字）。\n7. 仅输出最终结果，不要解释。"
         || trimmed
             == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要复述“要求/规则/输入”等模板内容。\n2. 保持原意与事实，去除口头重复和明显噪音；专有名词、产品名、模型名、缩写、数字、URL、代码符号保持原样。\n3. 列表优先：若出现两个及以上并列观点，或含“第一点/第二点/另外/最后/1、2、3”等序列信号，必须输出 Markdown 有序列表（每点一行简短句）。\n4. 非列表场景输出一行简洁文本。\n5. 中文数字尽量转阿拉伯数字（示例：一二三四五六七 -> 1234567；零点8B/零点八B -> 0.8B；两B -> 2B）；不要词内替换（例如“一些”不能变成“1些”）。"
+        || trimmed
+            == "请将下面的转录文本做中文后处理与排版，不要翻译。\n\n输入：\n${output}\n\n要求：\n1. 只输出最终结果，不要解释，不要输出“要求/规则/输入”等模板文字。\n2. 保持原意，去口头重复和语气词；专有名词、产品名、模型名、缩写、URL、代码保持原样；中文数字按语义转阿拉伯数字（如“零点8B/零点八B -> 0.8B”，“两B -> 2B”），但不要词内替换（如“一些”不能变“1些”）。\n3. 列表优先：只要出现并列观点或序号信号（如“第一/第二/另外/最后/1、2、3/请列出/分点”），必须输出 Markdown 有序列表；否则输出一行简洁文本。\n\n示例：\n- 输入：第一点要控糖，第二点要早睡，第三点要运动。\n  输出：\n  1. 要控糖。\n  2. 要早睡。\n  3. 要运动。\n- 输入：嗯这个模型还可以吧。\n  输出：这个模型还可以。"
 }
 
 fn is_prunable_legacy_preset_prompt(prompt: &LLMPrompt) -> bool {
@@ -883,6 +905,8 @@ fn is_legacy_default_post_process_system_prompt(value: &str) -> bool {
             == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n4. Never output explanations, bullet examples, wrappers, or meta commentary.\n5. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n6. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n7. If input content is empty, return an empty string."
         || trimmed
             == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Follow the selected user prompt template exactly.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, bullet examples, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string."
+        || trimmed
+            == "You are a strict transcript post-processor.\nOutput contract:\n1. Produce only the final processed text.\n2. Treat the selected user prompt template as instruction metadata; do not echo, paraphrase, or restate template rule lines.\n3. If the user prompt requests Arabic-digit conversion, apply it strictly while avoiding in-word substitution.\n4. Never output reasoning, analysis, chain-of-thought, or <think> tags.\n5. Never output explanations, wrappers, or meta commentary.\n6. Preserve meaning and key facts unless the selected user prompt explicitly requests transformation.\n7. Preserve proper nouns, product names, acronyms, numbers, and code-like tokens accurately.\n8. If input content is empty, return an empty string."
 }
 
 fn default_whisper_gpu_device() -> i32 {
@@ -1164,6 +1188,33 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
         changed = true;
     }
 
+    let normalized_script_timeout =
+        normalize_script_hook_timeout_ms(settings.script_hook_timeout_ms);
+    if settings.script_hook_timeout_ms != normalized_script_timeout {
+        settings.script_hook_timeout_ms = normalized_script_timeout;
+        changed = true;
+    }
+
+    let normalized_post_asr_path = settings
+        .post_asr_script_path
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if settings.post_asr_script_path != normalized_post_asr_path {
+        settings.post_asr_script_path = normalized_post_asr_path;
+        changed = true;
+    }
+
+    let normalized_post_llm_path = settings
+        .post_llm_script_path
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if settings.post_llm_script_path != normalized_post_llm_path {
+        settings.post_llm_script_path = normalized_post_llm_path;
+        changed = true;
+    }
+
     changed
 }
 
@@ -1281,6 +1332,10 @@ pub fn get_default_settings() -> AppSettings {
         qwen35_max_threads: default_qwen35_max_threads(),
         qwen35_server_ready_timeout_sec: default_qwen35_server_ready_timeout_sec(),
         qwen35_inference_timeout_sec: default_qwen35_inference_timeout_sec(),
+        script_hooks_enabled: default_script_hooks_enabled(),
+        post_asr_script_path: None,
+        post_llm_script_path: None,
+        script_hook_timeout_ms: default_script_hook_timeout_ms(),
         mute_while_recording: false,
         append_trailing_space: false,
         app_language: default_app_language(),

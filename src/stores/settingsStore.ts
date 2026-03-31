@@ -123,6 +123,14 @@ const settingUpdaters: {
   typing_tool: (value) => commands.changeTypingToolSetting(value as string),
   external_script_path: (value) =>
     commands.changeExternalScriptPathSetting(value as string | null),
+  script_hooks_enabled: (value) =>
+    commands.changeScriptHooksEnabledSetting(value as boolean),
+  post_asr_script_path: (value) =>
+    commands.changePostAsrScriptPathSetting(value as string | null),
+  post_llm_script_path: (value) =>
+    commands.changePostLlmScriptPathSetting(value as string | null),
+  script_hook_timeout_ms: (value) =>
+    commands.changeScriptHookTimeoutMsSetting(value as number),
   clipboard_handling: (value) =>
     commands.changeClipboardHandlingSetting(value as string),
   auto_submit: (value) => commands.changeAutoSubmitSetting(value as boolean),

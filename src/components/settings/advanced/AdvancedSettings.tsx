@@ -24,7 +24,7 @@ export const AdvancedSettings: React.FC = () => {
   const experimentalEnabled = getSetting("experimental_enabled") || false;
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
+    <div className="max-w-4xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.advanced.groups.app")}>
         <StartHidden descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />

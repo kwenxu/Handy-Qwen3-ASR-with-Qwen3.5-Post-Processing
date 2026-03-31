@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { commands } from "@/bindings";
 
 import { Alert } from "../../ui/Alert";
@@ -9,6 +10,7 @@ import {
   SettingContainer,
   SettingsGroup,
   Textarea,
+  ToggleSwitch,
 } from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
@@ -30,6 +32,8 @@ type PromptTemplate = {
 };
 
 const LOCAL_POST_PROCESS_PROVIDER_ID = "local-qwen35";
+const SCRIPT_HOOK_TIMEOUT_MIN = 100;
+const SCRIPT_HOOK_TIMEOUT_MAX = 10_000;
 
 const isPresetPrompt = (prompt: PromptTemplate): boolean =>
   prompt.id.startsWith("template_") || prompt.id.startsWith("default_");
@@ -525,6 +529,582 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
   );
 };
 
+type ScriptPathSettingKey = "post_asr_script_path" | "post_llm_script_path";
+type ScriptStage = "asr_post" | "llm_post";
+
+interface PostProcessingSettingsScriptHooksProps {
+  scope?: "all" | "asr" | "llm";
+  sectionId?: string;
+}
+
+const PostProcessingSettingsScriptHooksComponent: React.FC<
+  PostProcessingSettingsScriptHooksProps
+> = ({ scope = "all", sectionId }) => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+  const showAsrStage = scope === "all" || scope === "asr";
+  const showLlmStage = scope === "all" || scope === "llm";
+  const showGlobalSection = scope !== "llm";
+  const showTemplateSection = scope !== "asr";
+
+  const scriptHooksEnabled = getSetting("script_hooks_enabled") ?? false;
+  const currentPostAsrScriptPath = (
+    getSetting("post_asr_script_path") || ""
+  ).toString();
+  const currentPostLlmScriptPath = (
+    getSetting("post_llm_script_path") || ""
+  ).toString();
+  const currentScriptHookTimeoutMs = Number(
+    getSetting("script_hook_timeout_ms") || 1200,
+  );
+
+  const [postAsrScriptPathDraft, setPostAsrScriptPathDraft] = useState(
+    currentPostAsrScriptPath,
+  );
+  const [postLlmScriptPathDraft, setPostLlmScriptPathDraft] = useState(
+    currentPostLlmScriptPath,
+  );
+  const [scriptHookTimeoutDraft, setScriptHookTimeoutDraft] = useState(
+    String(currentScriptHookTimeoutMs),
+  );
+  const [sampleInputDraft, setSampleInputDraft] = useState("");
+  const [sampleOutput, setSampleOutput] = useState("");
+  const [statusMessage, setStatusMessage] = useState<{
+    variant: "error" | "success" | "info";
+    text: string;
+  } | null>(null);
+  const [isExportingTemplates, setIsExportingTemplates] = useState(false);
+  const [isRestoringTemplates, setIsRestoringTemplates] = useState(false);
+  const [testingStage, setTestingStage] = useState<"asr_post" | "llm_post" | null>(
+    null,
+  );
+  const [isImportingAsr, setIsImportingAsr] = useState(false);
+  const [isExportingAsr, setIsExportingAsr] = useState(false);
+  const [isImportingLlm, setIsImportingLlm] = useState(false);
+  const [isExportingLlm, setIsExportingLlm] = useState(false);
+
+  useEffect(() => {
+    setPostAsrScriptPathDraft(currentPostAsrScriptPath);
+  }, [currentPostAsrScriptPath]);
+
+  useEffect(() => {
+    setPostLlmScriptPathDraft(currentPostLlmScriptPath);
+  }, [currentPostLlmScriptPath]);
+
+  useEffect(() => {
+    setScriptHookTimeoutDraft(String(currentScriptHookTimeoutMs));
+  }, [currentScriptHookTimeoutMs]);
+
+  const normalizeTimeout = (value: number): number =>
+    Math.min(
+      SCRIPT_HOOK_TIMEOUT_MAX,
+      Math.max(SCRIPT_HOOK_TIMEOUT_MIN, value),
+    );
+
+  const commitScriptPath = (
+    key: ScriptPathSettingKey,
+    draftValue: string,
+    currentValue: string,
+  ) => {
+    const normalizedDraft = draftValue.trim();
+    const nextValue = normalizedDraft.length > 0 ? normalizedDraft : null;
+    const normalizedCurrent = currentValue.trim();
+    const current = normalizedCurrent.length > 0 ? normalizedCurrent : null;
+    if (nextValue === current) return;
+    void updateSetting(key, nextValue);
+  };
+
+  const commitScriptHookTimeout = () => {
+    const parsed = Number.parseInt(scriptHookTimeoutDraft, 10);
+    if (!Number.isFinite(parsed)) {
+      setScriptHookTimeoutDraft(String(currentScriptHookTimeoutMs));
+      return;
+    }
+    const normalized = normalizeTimeout(parsed);
+    setScriptHookTimeoutDraft(String(normalized));
+    if (normalized !== currentScriptHookTimeoutMs) {
+      void updateSetting("script_hook_timeout_ms", normalized);
+    }
+  };
+
+  const applyTemplatePaths = async (
+    postAsrPath: string,
+    postLlmPath: string,
+  ) => {
+    await updateSetting("post_asr_script_path", postAsrPath);
+    await updateSetting("post_llm_script_path", postLlmPath);
+    setPostAsrScriptPathDraft(postAsrPath);
+    setPostLlmScriptPathDraft(postLlmPath);
+  };
+
+  const handleExportTemplates = async () => {
+    setIsExportingTemplates(true);
+    setStatusMessage(null);
+    try {
+      const result = await commands.exportDefaultScriptHookTemplates();
+      if (result.status === "ok") {
+        await applyTemplatePaths(
+          result.data.post_asr_script_path,
+          result.data.post_llm_script_path,
+        );
+        setStatusMessage({
+          variant: "success",
+          text: t("settings.postProcessing.api.scriptHooks.templates.exportSuccess", {
+            dir: result.data.directory,
+          }),
+        });
+      } else {
+        setStatusMessage({
+          variant: "error",
+          text: String(result.error),
+        });
+      }
+    } catch (error) {
+      setStatusMessage({
+        variant: "error",
+        text: String(error),
+      });
+    } finally {
+      setIsExportingTemplates(false);
+    }
+  };
+
+  const handleRestoreTemplates = async () => {
+    setIsRestoringTemplates(true);
+    setStatusMessage(null);
+    try {
+      const result = await commands.restoreDefaultScriptHookTemplates();
+      if (result.status === "ok") {
+        await applyTemplatePaths(
+          result.data.post_asr_script_path,
+          result.data.post_llm_script_path,
+        );
+        setStatusMessage({
+          variant: "success",
+          text: t("settings.postProcessing.api.scriptHooks.templates.restoreSuccess", {
+            dir: result.data.directory,
+          }),
+        });
+      } else {
+        setStatusMessage({
+          variant: "error",
+          text: String(result.error),
+        });
+      }
+    } catch (error) {
+      setStatusMessage({
+        variant: "error",
+        text: String(error),
+      });
+    } finally {
+      setIsRestoringTemplates(false);
+    }
+  };
+
+  const applyImportedStagePath = async (stage: ScriptStage, path: string) => {
+    if (stage === "asr_post") {
+      await updateSetting("post_asr_script_path", path);
+      setPostAsrScriptPathDraft(path);
+      return;
+    }
+    await updateSetting("post_llm_script_path", path);
+    setPostLlmScriptPathDraft(path);
+  };
+
+  const handleImportStageScript = async (stage: ScriptStage) => {
+    if (stage === "asr_post") setIsImportingAsr(true);
+    else setIsImportingLlm(true);
+    setStatusMessage(null);
+
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: "Script",
+            extensions: ["py", "js", "mjs", "cjs", "sh"],
+          },
+        ],
+      });
+      if (!selected || Array.isArray(selected)) return;
+
+      const result = await commands.importScriptStageFromPath(stage, selected);
+      if (result.status === "ok") {
+        await applyImportedStagePath(stage, result.data);
+        setStatusMessage({
+          variant: "success",
+          text: t("settings.postProcessing.api.scriptHooks.stageImportSuccess", {
+            path: result.data,
+          }),
+        });
+      } else {
+        setStatusMessage({
+          variant: "error",
+          text: String(result.error),
+        });
+      }
+    } catch (error) {
+      setStatusMessage({
+        variant: "error",
+        text: String(error),
+      });
+    } finally {
+      if (stage === "asr_post") setIsImportingAsr(false);
+      else setIsImportingLlm(false);
+    }
+  };
+
+  const handleExportStageScript = async (stage: ScriptStage) => {
+    if (stage === "asr_post") setIsExportingAsr(true);
+    else setIsExportingLlm(true);
+    setStatusMessage(null);
+    try {
+      const result = await commands.exportScriptStageToDesktop(stage);
+      if (result.status === "ok") {
+        setStatusMessage({
+          variant: "success",
+          text: t("settings.postProcessing.api.scriptHooks.stageExportSuccess", {
+            path: result.data,
+          }),
+        });
+      } else {
+        setStatusMessage({
+          variant: "error",
+          text: String(result.error),
+        });
+      }
+    } catch (error) {
+      setStatusMessage({
+        variant: "error",
+        text: String(error),
+      });
+    } finally {
+      if (stage === "asr_post") setIsExportingAsr(false);
+      else setIsExportingLlm(false);
+    }
+  };
+
+  const handleTestStage = async (stage: "asr_post" | "llm_post") => {
+    setTestingStage(stage);
+    setStatusMessage(null);
+
+    const stagePath =
+      stage === "asr_post" ? postAsrScriptPathDraft.trim() : postLlmScriptPathDraft.trim();
+    const stageLabelKey =
+      stage === "asr_post"
+        ? "settings.postProcessing.api.scriptHooks.test.asrButton"
+        : "settings.postProcessing.api.scriptHooks.test.llmButton";
+
+    try {
+      const result = await commands.testScriptHook(
+        stage,
+        sampleInputDraft,
+        stagePath.length > 0 ? stagePath : null,
+      );
+      if (result.status === "ok") {
+        setSampleOutput(result.data.output_text);
+        setStatusMessage({
+          variant: "success",
+          text: t("settings.postProcessing.api.scriptHooks.test.success", {
+            stage: t(stageLabelKey),
+            ms: result.data.duration_ms,
+            path: result.data.used_script_path,
+          }),
+        });
+      } else {
+        setStatusMessage({
+          variant: "error",
+          text: String(result.error),
+        });
+      }
+    } catch (error) {
+      setStatusMessage({
+        variant: "error",
+        text: String(error),
+      });
+    } finally {
+      setTestingStage(null);
+    }
+  };
+
+  return (
+    <div id={sectionId}>
+      {showGlobalSection && (
+        <ToggleSwitch
+          checked={scriptHooksEnabled}
+          onChange={(enabled) => {
+            void updateSetting("script_hooks_enabled", enabled);
+          }}
+          isUpdating={isUpdating("script_hooks_enabled")}
+          label={t("settings.postProcessing.api.scriptHooks.enabled.title")}
+          description={t(
+            "settings.postProcessing.api.scriptHooks.enabled.description",
+          )}
+          descriptionMode="tooltip"
+          grouped={true}
+        />
+      )}
+
+      {showAsrStage && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.scriptHooks.postAsrPath.title")}
+          description={t(
+            "settings.postProcessing.api.scriptHooks.postAsrPath.description",
+          )}
+          descriptionMode="tooltip"
+          layout="horizontal"
+          grouped={true}
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              value={postAsrScriptPathDraft}
+              onChange={(event) => setPostAsrScriptPathDraft(event.target.value)}
+              onBlur={() =>
+                commitScriptPath(
+                  "post_asr_script_path",
+                  postAsrScriptPathDraft,
+                  currentPostAsrScriptPath,
+                )
+              }
+              placeholder={t(
+                "settings.postProcessing.api.scriptHooks.postAsrPath.placeholder",
+              )}
+              disabled={isUpdating("post_asr_script_path")}
+              className="min-w-[320px]"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isImportingAsr || isExportingAsr}
+              onClick={() => {
+                void handleImportStageScript("asr_post");
+              }}
+            >
+              {t("settings.postProcessing.api.scriptHooks.postAsrPath.importButton")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isImportingAsr || isExportingAsr}
+              onClick={() => {
+                void handleExportStageScript("asr_post");
+              }}
+            >
+              {t("settings.postProcessing.api.scriptHooks.postAsrPath.exportButton")}
+            </Button>
+          </div>
+        </SettingContainer>
+      )}
+
+      {showLlmStage && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.scriptHooks.postLlmPath.title")}
+          description={t(
+            "settings.postProcessing.api.scriptHooks.postLlmPath.description",
+          )}
+          descriptionMode="tooltip"
+          layout="horizontal"
+          grouped={true}
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              value={postLlmScriptPathDraft}
+              onChange={(event) => setPostLlmScriptPathDraft(event.target.value)}
+              onBlur={() =>
+                commitScriptPath(
+                  "post_llm_script_path",
+                  postLlmScriptPathDraft,
+                  currentPostLlmScriptPath,
+                )
+              }
+              placeholder={t(
+                "settings.postProcessing.api.scriptHooks.postLlmPath.placeholder",
+              )}
+              disabled={isUpdating("post_llm_script_path")}
+              className="min-w-[320px]"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isImportingLlm || isExportingLlm}
+              onClick={() => {
+                void handleImportStageScript("llm_post");
+              }}
+            >
+              {t("settings.postProcessing.api.scriptHooks.postLlmPath.importButton")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isImportingLlm || isExportingLlm}
+              onClick={() => {
+                void handleExportStageScript("llm_post");
+              }}
+            >
+              {t("settings.postProcessing.api.scriptHooks.postLlmPath.exportButton")}
+            </Button>
+          </div>
+        </SettingContainer>
+      )}
+
+      {showGlobalSection && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.scriptHooks.timeout.title")}
+          description={t("settings.postProcessing.api.scriptHooks.timeout.description")}
+          descriptionMode="tooltip"
+          layout="horizontal"
+          grouped={true}
+        >
+          <Input
+            type="number"
+            min={SCRIPT_HOOK_TIMEOUT_MIN}
+            max={SCRIPT_HOOK_TIMEOUT_MAX}
+            step={50}
+            value={scriptHookTimeoutDraft}
+            onChange={(event) => {
+              const next = event.target.value;
+              setScriptHookTimeoutDraft(next);
+              const parsed = Number.parseInt(next, 10);
+              if (!Number.isFinite(parsed)) return;
+              const normalized = normalizeTimeout(parsed);
+              if (normalized !== currentScriptHookTimeoutMs) {
+                void updateSetting("script_hook_timeout_ms", normalized);
+              }
+            }}
+            onBlur={commitScriptHookTimeout}
+            disabled={isUpdating("script_hook_timeout_ms")}
+            className="w-[140px]"
+            variant="compact"
+          />
+        </SettingContainer>
+      )}
+
+      {showGlobalSection && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.scriptHooks.protocol.title")}
+          description={t("settings.postProcessing.api.scriptHooks.protocol.description")}
+          descriptionMode="tooltip"
+          layout="stacked"
+          grouped={true}
+        >
+          <div className="rounded-md border border-mid-gray/20 bg-mid-gray/5 p-3 text-xs leading-relaxed text-mid-gray whitespace-pre-wrap">
+            {t("settings.postProcessing.api.scriptHooks.protocol.contract")}
+          </div>
+          <p className="mt-2 text-xs text-mid-gray/70">
+            <Trans
+              i18nKey="settings.postProcessing.api.scriptHooks.protocol.tip"
+              components={{ code: <code /> }}
+            />
+          </p>
+        </SettingContainer>
+      )}
+
+      {showTemplateSection && (
+        <SettingContainer
+          title={t("settings.postProcessing.api.scriptHooks.templates.title")}
+          description={t("settings.postProcessing.api.scriptHooks.templates.description")}
+          descriptionMode="tooltip"
+          layout="stacked"
+          grouped={true}
+        >
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={handleExportTemplates}
+              variant="secondary"
+              size="md"
+              disabled={isExportingTemplates || isRestoringTemplates}
+            >
+              {t("settings.postProcessing.api.scriptHooks.templates.exportButton")}
+            </Button>
+            <Button
+              onClick={handleRestoreTemplates}
+              variant="secondary"
+              size="md"
+              disabled={isExportingTemplates || isRestoringTemplates}
+            >
+              {t("settings.postProcessing.api.scriptHooks.templates.restoreButton")}
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-mid-gray/70">
+            {t("settings.postProcessing.api.scriptHooks.templates.hint")}
+          </p>
+        </SettingContainer>
+      )}
+
+      <SettingContainer
+        title={t("settings.postProcessing.api.scriptHooks.test.title")}
+        description={t("settings.postProcessing.api.scriptHooks.test.description")}
+        descriptionMode="tooltip"
+        layout="stacked"
+        grouped={true}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-semibold text-text">
+              {t("settings.postProcessing.api.scriptHooks.test.inputLabel")}
+            </label>
+            <Textarea
+              value={sampleInputDraft}
+              onChange={(event) => setSampleInputDraft(event.target.value)}
+              placeholder={t(
+                "settings.postProcessing.api.scriptHooks.test.inputPlaceholder",
+              )}
+              className="w-full min-h-[110px]"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {showAsrStage && (
+              <Button
+                onClick={() => {
+                  void handleTestStage("asr_post");
+                }}
+                variant="primary-soft"
+                size="md"
+                disabled={testingStage !== null}
+              >
+                {t("settings.postProcessing.api.scriptHooks.test.asrButton")}
+              </Button>
+            )}
+            {showLlmStage && (
+              <Button
+                onClick={() => {
+                  void handleTestStage("llm_post");
+                }}
+                variant="primary-soft"
+                size="md"
+                disabled={testingStage !== null}
+              >
+                {t("settings.postProcessing.api.scriptHooks.test.llmButton")}
+              </Button>
+            )}
+          </div>
+
+          {statusMessage && (
+            <Alert variant={statusMessage.variant} contained>
+              {statusMessage.text}
+            </Alert>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-sm font-semibold text-text">
+              {t("settings.postProcessing.api.scriptHooks.test.outputLabel")}
+            </label>
+            <Textarea
+              value={sampleOutput}
+              readOnly
+              className="w-full min-h-[100px]"
+            />
+          </div>
+        </div>
+      </SettingContainer>
+    </div>
+  );
+};
+
 export const PostProcessingSettingsApi = React.memo(
   PostProcessingSettingsApiComponent,
 );
@@ -535,11 +1115,17 @@ export const PostProcessingSettingsPrompts = React.memo(
 );
 PostProcessingSettingsPrompts.displayName = "PostProcessingSettingsPrompts";
 
+export const PostProcessingSettingsScriptHooks = React.memo(
+  PostProcessingSettingsScriptHooksComponent,
+);
+PostProcessingSettingsScriptHooks.displayName =
+  "PostProcessingSettingsScriptHooks";
+
 export const PostProcessingSettings: React.FC = () => {
   const { t } = useTranslation();
 
   return (
-    <div className="max-w-5xl w-full mx-auto space-y-6">
+    <div className="max-w-6xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.postProcessing.api.title")}>
         <PostProcessingSettingsApi />
       </SettingsGroup>

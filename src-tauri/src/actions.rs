@@ -5,6 +5,7 @@ use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::qwen35_post_manager::Qwen35PostManager;
+use crate::managers::script_hook::{maybe_apply_script_hook, ScriptHookContext, ScriptHookStage};
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
     get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID, LOCAL_QWEN35_PROVIDER_ID,
@@ -1015,8 +1016,13 @@ pub(crate) async fn process_transcription_output(
     if post_process {
         if let Some(processed_text) = post_process_transcription(app, &settings, &final_text).await
         {
-            post_processed_text = Some(processed_text.clone());
-            final_text = processed_text;
+            let provider_id = settings.post_process_provider_id.as_str();
+            let model_id = settings
+                .post_process_models
+                .get(provider_id)
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let mut selected_prompt_id: Option<&str> = None;
 
             if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
                 if let Some(prompt) = settings
@@ -1025,8 +1031,30 @@ pub(crate) async fn process_transcription_output(
                     .find(|prompt| &prompt.id == prompt_id)
                 {
                     post_process_prompt = Some(prompt.prompt.clone());
+                    selected_prompt_id = Some(prompt.id.as_str());
                 }
             }
+
+            let scripted_text = maybe_apply_script_hook(
+                &settings,
+                ScriptHookStage::LlmPost,
+                settings.post_llm_script_path.as_deref(),
+                &processed_text,
+                ScriptHookContext {
+                    lang: Some(settings.selected_language.as_str()),
+                    model_id,
+                    provider_id: Some(provider_id),
+                    prompt_id: selected_prompt_id,
+                    system_prompt: Some(settings.post_process_system_prompt.as_str()),
+                    user_prompt_template: post_process_prompt.as_deref(),
+                    metadata: Some(serde_json::json!({
+                        "phase": "after_post_process",
+                    })),
+                },
+            );
+
+            post_processed_text = Some(scripted_text.clone());
+            final_text = scripted_text;
         }
     } else if final_text != transcription {
         post_processed_text = Some(final_text.clone());

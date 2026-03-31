@@ -16,12 +16,14 @@ mod tauri_impl;
 use log::{error, info, warn};
 use serde::Serialize;
 use specta::Type;
+use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::managers::post_process_model::PostProcessModelManager;
 use crate::managers::qwen35_post_manager::Qwen35PostManager;
+use crate::managers::script_hook::{run_script_hook, ScriptHookContext, ScriptHookStage};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
@@ -30,6 +32,54 @@ use crate::settings::{
     APPLE_INTELLIGENCE_PROVIDER_ID, LOCAL_QWEN35_PROVIDER_ID,
 };
 use crate::tray;
+
+const DEFAULT_SCRIPT_HOOKS_DIR: &str = "script-hooks";
+const DEFAULT_ASR_SCRIPT_FILE: &str = "asr_post_hook.py";
+const DEFAULT_LLM_SCRIPT_FILE: &str = "llm_post_hook.py";
+const DESKTOP_EXPORT_ASR_SCRIPT_FILE: &str = "Handy-asr-post-script.py";
+const DESKTOP_EXPORT_LLM_SCRIPT_FILE: &str = "Handy-llm-post-script.py";
+const DEFAULT_ASR_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
+import json
+import sys
+
+
+def main() -> None:
+    raw = sys.stdin.read().strip()
+    if not raw:
+        print(json.dumps({"text": ""}, ensure_ascii=False))
+        return
+
+    data = json.loads(raw)
+    text = str(data.get("text", ""))
+
+    # TODO: customize ASR-stage cleanup rules here.
+    print(json.dumps({"text": text}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
+"#;
+const DEFAULT_LLM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
+import json
+import sys
+
+
+def main() -> None:
+    raw = sys.stdin.read().strip()
+    if not raw:
+        print(json.dumps({"text": ""}, ensure_ascii=False))
+        return
+
+    data = json.loads(raw)
+    text = str(data.get("text", ""))
+
+    # TODO: customize LLM-stage post-cleaning rules here.
+    print(json.dumps({"text": text}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
+"#;
 
 // Note: Commands are accessed via shortcut::handy_keys:: in lib.rs
 
@@ -793,6 +843,348 @@ pub fn change_external_script_path_setting(
     settings.external_script_path = path;
     settings::write_settings(&app, settings);
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_script_hooks_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.script_hooks_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_asr_script_path_setting(
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_asr_script_path = path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_llm_script_path_setting(
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_llm_script_path = path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_script_hook_timeout_ms_setting(app: AppHandle, value: u64) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.script_hook_timeout_ms = settings::normalize_script_hook_timeout_ms(value);
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[derive(Serialize, Type)]
+pub struct ScriptHookTemplatePaths {
+    pub directory: String,
+    pub post_asr_script_path: String,
+    pub post_llm_script_path: String,
+}
+
+#[derive(Serialize, Type)]
+pub struct ScriptHookTestResult {
+    pub stage: String,
+    pub used_script_path: String,
+    pub input_text: String,
+    pub output_text: String,
+    pub duration_ms: u64,
+}
+
+fn parse_script_hook_stage(stage: &str) -> Result<ScriptHookStage, String> {
+    match stage.trim().to_ascii_lowercase().as_str() {
+        "asr_post" | "asr" | "post_asr" => Ok(ScriptHookStage::AsrPost),
+        "llm_post" | "llm" | "post_llm" => Ok(ScriptHookStage::LlmPost),
+        other => Err(format!(
+            "Unsupported stage '{}'. Use 'asr_post' or 'llm_post'.",
+            other
+        )),
+    }
+}
+
+fn ensure_script_hooks_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = crate::portable::resolve_app_data(app, DEFAULT_SCRIPT_HOOKS_DIR)
+        .map_err(|err| format!("Failed to resolve script-hooks directory: {}", err))?;
+    fs::create_dir_all(&dir).map_err(|err| {
+        format!(
+            "Failed to create script-hooks directory {}: {}",
+            dir.display(),
+            err
+        )
+    })?;
+    Ok(dir)
+}
+
+fn write_template_file(
+    path: &std::path::Path,
+    content: &str,
+    overwrite: bool,
+) -> Result<(), String> {
+    if path.exists() && !overwrite {
+        return Ok(());
+    }
+
+    fs::write(path, content)
+        .map_err(|err| format!("Failed to write template {}: {}", path.display(), err))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
+    }
+
+    Ok(())
+}
+
+fn export_default_script_hook_templates_internal(
+    app: &AppHandle,
+    overwrite: bool,
+) -> Result<ScriptHookTemplatePaths, String> {
+    let dir = ensure_script_hooks_dir(app)?;
+    let asr_path = dir.join(DEFAULT_ASR_SCRIPT_FILE);
+    let llm_path = dir.join(DEFAULT_LLM_SCRIPT_FILE);
+
+    write_template_file(&asr_path, DEFAULT_ASR_SCRIPT_TEMPLATE, overwrite)?;
+    write_template_file(&llm_path, DEFAULT_LLM_SCRIPT_TEMPLATE, overwrite)?;
+
+    Ok(ScriptHookTemplatePaths {
+        directory: dir.to_string_lossy().to_string(),
+        post_asr_script_path: asr_path.to_string_lossy().to_string(),
+        post_llm_script_path: llm_path.to_string_lossy().to_string(),
+    })
+}
+
+fn ensure_script_source_for_stage(
+    app: &AppHandle,
+    settings: &settings::AppSettings,
+    stage: ScriptHookStage,
+) -> Result<std::path::PathBuf, String> {
+    let configured_path = match stage {
+        ScriptHookStage::AsrPost => settings.post_asr_script_path.as_deref(),
+        ScriptHookStage::LlmPost => settings.post_llm_script_path.as_deref(),
+    }
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(std::path::PathBuf::from);
+
+    if let Some(path) = configured_path {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    let template_paths = export_default_script_hook_templates_internal(app, false)?;
+    let path = match stage {
+        ScriptHookStage::AsrPost => template_paths.post_asr_script_path,
+        ScriptHookStage::LlmPost => template_paths.post_llm_script_path,
+    };
+    Ok(std::path::PathBuf::from(path))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn export_default_script_hook_templates(
+    app: AppHandle,
+) -> Result<ScriptHookTemplatePaths, String> {
+    export_default_script_hook_templates_internal(&app, false)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn restore_default_script_hook_templates(
+    app: AppHandle,
+) -> Result<ScriptHookTemplatePaths, String> {
+    export_default_script_hook_templates_internal(&app, true)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn export_script_stage_to_desktop(app: AppHandle, stage: String) -> Result<String, String> {
+    let parsed_stage = parse_script_hook_stage(&stage)?;
+    let runtime_settings = get_settings(&app);
+    let source_path = ensure_script_source_for_stage(&app, &runtime_settings, parsed_stage)?;
+
+    let desktop_dir = app
+        .path()
+        .desktop_dir()
+        .map_err(|err| format!("Failed to resolve desktop directory: {}", err))?;
+    fs::create_dir_all(&desktop_dir).map_err(|err| {
+        format!(
+            "Failed to prepare desktop directory {}: {}",
+            desktop_dir.display(),
+            err
+        )
+    })?;
+
+    let target_name = match parsed_stage {
+        ScriptHookStage::AsrPost => DESKTOP_EXPORT_ASR_SCRIPT_FILE,
+        ScriptHookStage::LlmPost => DESKTOP_EXPORT_LLM_SCRIPT_FILE,
+    };
+    let target_path = desktop_dir.join(target_name);
+
+    fs::copy(&source_path, &target_path).map_err(|err| {
+        format!(
+            "Failed to export script from {} to {}: {}",
+            source_path.display(),
+            target_path.display(),
+            err
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755));
+    }
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn import_script_stage_from_path(
+    app: AppHandle,
+    stage: String,
+    source_path: String,
+) -> Result<String, String> {
+    let parsed_stage = parse_script_hook_stage(&stage)?;
+    let source = std::path::PathBuf::from(source_path.trim());
+
+    if source_path.trim().is_empty() {
+        return Err("Source script path is empty.".to_string());
+    }
+    if !source.exists() {
+        return Err(format!(
+            "Source script does not exist: {}",
+            source.display()
+        ));
+    }
+    if !source.is_file() {
+        return Err(format!("Source path is not a file: {}", source.display()));
+    }
+
+    let scripts_dir = ensure_script_hooks_dir(&app)?;
+    let file_name = match parsed_stage {
+        ScriptHookStage::AsrPost => DEFAULT_ASR_SCRIPT_FILE,
+        ScriptHookStage::LlmPost => DEFAULT_LLM_SCRIPT_FILE,
+    };
+    let target_path = scripts_dir.join(file_name);
+
+    fs::copy(&source, &target_path).map_err(|err| {
+        format!(
+            "Failed to import script from {} to {}: {}",
+            source.display(),
+            target_path.display(),
+            err
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755));
+    }
+
+    let mut runtime_settings = get_settings(&app);
+    let target_str = target_path.to_string_lossy().to_string();
+    match parsed_stage {
+        ScriptHookStage::AsrPost => {
+            runtime_settings.post_asr_script_path = Some(target_str.clone());
+        }
+        ScriptHookStage::LlmPost => {
+            runtime_settings.post_llm_script_path = Some(target_str.clone());
+        }
+    }
+    settings::write_settings(&app, runtime_settings);
+
+    Ok(target_str)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn test_script_hook(
+    app: AppHandle,
+    stage: String,
+    text: String,
+    script_path: Option<String>,
+) -> Result<ScriptHookTestResult, String> {
+    let parsed_stage = parse_script_hook_stage(&stage)?;
+    let settings = get_settings(&app);
+
+    let selected_prompt_template = settings
+        .post_process_selected_prompt_id
+        .as_ref()
+        .and_then(|prompt_id| {
+            settings
+                .post_process_prompts
+                .iter()
+                .find(|prompt| &prompt.id == prompt_id)
+        })
+        .map(|prompt| prompt.prompt.as_str());
+
+    let fallback_path = match parsed_stage {
+        ScriptHookStage::AsrPost => settings.post_asr_script_path.as_deref(),
+        ScriptHookStage::LlmPost => settings.post_llm_script_path.as_deref(),
+    };
+
+    let effective_path = script_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(fallback_path)
+        .ok_or_else(|| "Script path is empty for selected stage.".to_string())?
+        .to_string();
+
+    let stage_name = match parsed_stage {
+        ScriptHookStage::AsrPost => "asr_post",
+        ScriptHookStage::LlmPost => "llm_post",
+    };
+
+    let timer = std::time::Instant::now();
+    let output_text = run_script_hook(
+        parsed_stage,
+        &effective_path,
+        &text,
+        settings.script_hook_timeout_ms,
+        ScriptHookContext {
+            lang: Some(settings.selected_language.as_str()),
+            model_id: Some(settings.selected_model.as_str()),
+            provider_id: Some(settings.post_process_provider_id.as_str()),
+            prompt_id: settings.post_process_selected_prompt_id.as_deref(),
+            system_prompt: Some(settings.post_process_system_prompt.as_str()),
+            user_prompt_template: selected_prompt_template,
+            metadata: Some(serde_json::json!({
+                "phase": "manual_test",
+            })),
+        },
+    )?;
+
+    Ok(ScriptHookTestResult {
+        stage: stage_name.to_string(),
+        used_script_path: effective_path,
+        input_text: text,
+        output_text,
+        duration_ms: timer.elapsed().as_millis() as u64,
+    })
 }
 
 #[tauri::command]

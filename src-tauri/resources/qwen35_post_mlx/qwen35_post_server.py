@@ -35,30 +35,17 @@ def load_model_once():
 
 
 def build_prompt(system_prompt: str, user_content: str, tokenizer) -> str:
-    safety_rules = (
-        "You are a strict transcription post-processor.\n"
-        "Output rules:\n"
-        "1. Output only the final processed text.\n"
-        "2. Never output reasoning, analysis, or chain-of-thought.\n"
-        "3. Never output <think> tags.\n"
-        "4. Never output explanations, bullet points, examples, or wrappers.\n"
-        "5. Never repeat the instruction text.\n"
-    )
-
-    base_system = (system_prompt or "").strip()
-    merged_system = (
-        f"{safety_rules}\n\n{base_system}" if base_system else safety_rules
-    ).strip()
-
+    # Use only user-visible prompts (system + user template) from UI.
+    # Avoid injecting hidden instruction layers at runtime.
+    merged_system = (system_prompt or "").strip()
     task = (user_content or "").strip()
     if not task:
-        task = "Return an empty string."
+        task = ""
 
-    task = f"{task}\n\nReturn only the final text."
-    messages = [
-        {"role": "system", "content": merged_system},
-        {"role": "user", "content": task},
-    ]
+    messages = []
+    if merged_system:
+        messages.append({"role": "system", "content": merged_system})
+    messages.append({"role": "user", "content": task})
 
     if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
         try:
@@ -74,8 +61,8 @@ def build_prompt(system_prompt: str, user_content: str, tokenizer) -> str:
             pass
 
     return (
-        f"{merged_system}\n\n"
-        f"Task:\n{task}"
+        (f"{merged_system}\n\n" if merged_system else "")
+        + f"{task}"
     )
 
 

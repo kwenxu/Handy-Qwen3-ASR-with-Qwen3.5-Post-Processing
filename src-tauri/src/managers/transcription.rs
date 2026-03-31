@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::model::{EngineType, ModelManager};
 use crate::managers::qwen3_engine::{init_qwen3_python_path, Qwen3Engine, Qwen3InferenceParams};
+use crate::managers::script_hook::{maybe_apply_script_hook, ScriptHookContext, ScriptHookStage};
 use crate::settings::{get_settings, OrtAcceleratorSetting, WhisperAcceleratorSetting};
 use anyhow::Result;
 use log::{debug, error, info, warn};
@@ -666,7 +667,20 @@ impl TranscriptionManager {
             translation_note
         );
 
-        let final_result = filtered_result;
+        let final_result = maybe_apply_script_hook(
+            &settings,
+            ScriptHookStage::AsrPost,
+            settings.post_asr_script_path.as_deref(),
+            &filtered_result,
+            ScriptHookContext {
+                lang: Some(validated_language.as_str()),
+                model_id: Some(settings.selected_model.as_str()),
+                metadata: Some(serde_json::json!({
+                    "phase": "after_transcription",
+                })),
+                ..Default::default()
+            },
+        );
 
         if final_result.is_empty() {
             info!("Transcription result is empty");

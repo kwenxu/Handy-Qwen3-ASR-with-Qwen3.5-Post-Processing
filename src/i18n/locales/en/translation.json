@@ -358,8 +358,61 @@
     "performance": {
       "title": "Performance",
       "groups": {
-        "transcription": "Transcription Model Performance",
-        "postProcessing": "Post-Processing Model Performance"
+        "pipeline": "Pipeline & APP Processing Scripts",
+        "transcription": "Stage A · Transcription Model",
+        "postProcessing": "Stage B · Post-Processing Model"
+      },
+      "pipeline": {
+        "title": "Runtime Pipeline (Model vs APP Script)",
+        "description": "Shows where model inference happens and where local APP scripts run. APP scripts include built-in conservative fallback and your editable external scripts.",
+        "legend": {
+          "model": "Model Stage",
+          "app": "APP Script Stage",
+          "io": "Input / Output"
+        },
+        "steps": {
+          "input": {
+            "title": "User Speech Input",
+            "description": "Voice captured from microphone."
+          },
+          "transcriptionModel": {
+            "title": "Transcription Model",
+            "description": "Qwen/Whisper transcribes speech into raw text."
+          },
+          "asrAppScript": {
+            "title": "APP Processing Script (After Transcription)",
+            "description": "Built-in fallback + optional external script for ASR-stage cleanup."
+          },
+          "postProcessModel": {
+            "title": "Post-Processing Model",
+            "description": "Applies system prompt, user prompt template, and generation params."
+          },
+          "llmAppScript": {
+            "title": "APP Processing Script (After Post-Process Model)",
+            "description": "Built-in fallback + optional external script for final cleanup."
+          },
+          "output": {
+            "title": "Final Text Output",
+            "description": "Result sent to paste/history pipeline."
+          }
+        }
+      },
+      "scriptBlocks": {
+        "asr": {
+          "title": "Step 3 · APP Processing Script (After Transcription)",
+          "description": "Configure script path, import/export, and test for the post-transcription APP stage."
+        },
+        "llm": {
+          "title": "Step 5 · APP Processing Script (After Post-Process Model)",
+          "description": "Configure script path, import/export, and test for the final APP stage after post-processing model."
+        }
+      },
+      "outputStage": {
+        "title": "Step 6 · Final Output",
+        "description": "Output enters paste/history pipeline after model + APP processing stages.",
+        "noteTitle": "Final Output Note",
+        "noteDescription": "This stage is primarily controlled by output and history settings.",
+        "note": "If you need to adjust insertion behavior, clipboard handling, or history retention, use Advanced/History settings."
       },
       "adaptiveIdle": {
         "title": "Idle Release Strategy (Adaptive)",
@@ -390,13 +443,13 @@
         "postProcessHint": "Post-processing model: falls back to on-trigger warmup instead of startup residency."
       },
       "qwenTranscription": {
-        "title": "Qwen Transcription Runtime (2 models)",
+        "title": "Model Stage: Qwen Transcription Runtime (2 models)",
         "description": "Runtime performance path for Qwen3-ASR-0.6B and 1.7B.",
         "hint": "Prefers compatible system Python (>=3.11); falls back to bundled uv + .venv automatically. Python package index uses mirror-first fallback."
       },
       "whisperExperimental": "Whisper Acceleration (Experimental)",
       "qwenPanel": {
-        "title": "Qwen Performance Panel",
+        "title": "Model Stage: Qwen Post-Processing Runtime",
         "strategy": {
           "title": "Startup Load Strategy",
           "description": "Controls whether Qwen transcription and post-processing model loads run in parallel or serially on app startup.",
@@ -536,6 +589,58 @@
           "placeholderWithOptions": "Search or select a model",
           "placeholderNoOptions": "Type a model name",
           "refreshModels": "Refresh models"
+        },
+        "scriptHooks": {
+          "title": "APP Processing Scripts (Geek)",
+          "enabled": {
+            "title": "Enable APP Processing Scripts",
+            "description": "Run local APP processing scripts in configured stages. Disabled means script stages are skipped."
+          },
+          "postAsrPath": {
+            "title": "APP Script Path: After Transcription",
+            "description": "Runs after transcription output is cleaned by baseline filters. Leave empty to skip this APP stage.",
+            "placeholder": "/Users/you/hooks/asr_post.py",
+            "importButton": "Import Script",
+            "exportButton": "Export to Desktop"
+          },
+          "postLlmPath": {
+            "title": "APP Script Path: After Post-Process Model",
+            "description": "Runs after the post-processing model returns text. Leave empty to skip this APP stage.",
+            "placeholder": "/Users/you/hooks/llm_post.py",
+            "importButton": "Import Script",
+            "exportButton": "Export to Desktop"
+          },
+          "timeout": {
+            "title": "Script Timeout (ms)",
+            "description": "Maximum wait time per script run. Range: 100-10000 ms."
+          },
+          "protocol": {
+            "title": "APP Script I/O Contract",
+            "description": "Each script receives one JSON line from stdin and should return plain text or JSON on stdout.",
+            "contract": "stdin JSON: {\"stage\":\"asr_post|llm_post\",\"text\":\"...\",...}\nstdout JSON (recommended): {\"text\":\"...\"}\nstdout plain text: ...",
+            "tip": "Use <code>stage</code> to branch logic for transcription-stage and post-process-stage scripts. Non-zero exit, timeout, or invalid output will fall back to original text."
+          },
+          "templates": {
+            "title": "Default Templates",
+            "description": "Export built-in script templates to your app data folder, or restore them to defaults.",
+            "exportButton": "Export Templates",
+            "restoreButton": "Restore Templates",
+            "hint": "Export writes files only when missing. Restore overwrites existing templates.",
+            "exportSuccess": "Templates exported. Directory: {{dir}}",
+            "restoreSuccess": "Templates restored to defaults. Directory: {{dir}}"
+          },
+          "test": {
+            "title": "Script Test",
+            "description": "Run one manual script call for ASR or post-processing stage and inspect the real output.",
+            "inputLabel": "Test Input",
+            "inputPlaceholder": "Type any sample text to test script replacement...",
+            "asrButton": "Test Script: After Transcription",
+            "llmButton": "Test Script: After Post-Process Model",
+            "outputLabel": "Script Output",
+            "success": "{{stage}} succeeded in {{ms}}ms · {{path}}"
+          },
+          "stageImportSuccess": "Script imported and activated: {{path}}",
+          "stageExportSuccess": "Script exported to Desktop: {{path}}"
         }
       },
       "prompts": {
