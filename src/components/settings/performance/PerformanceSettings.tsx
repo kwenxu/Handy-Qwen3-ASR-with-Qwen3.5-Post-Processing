@@ -141,7 +141,7 @@ const CollapsibleBlock: React.FC<CollapsibleBlockProps> = ({
       >
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h2 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
+            <h2 className="text-xs font-semibold text-text/95 uppercase tracking-wide">
               {title}
             </h2>
             {description ? (

@@ -400,11 +400,11 @@
       "scriptBlocks": {
         "asr": {
           "title": "Step 3 · APP Processing Script (After Transcription)",
-          "description": "Configure script path, import/export, and test for the post-transcription APP stage."
+          "description": "Configure external plug-in scripts (Python/JS/Shell) for the post-transcription APP stage. Scripts run at runtime and are not embedded into the app binary."
         },
         "llm": {
           "title": "Step 5 · APP Processing Script (After Post-Process Model)",
-          "description": "Configure script path, import/export, and test for the final APP stage after post-processing model."
+          "description": "Configure external plug-in scripts (Python/JS/Shell) for the final APP stage after post-processing model. Scripts run at runtime and are not embedded into the app binary."
         }
       },
       "outputStage": {
@@ -594,7 +594,7 @@
           "title": "APP Processing Scripts (Geek)",
           "enabled": {
             "title": "Enable APP Processing Scripts",
-            "description": "Run local APP processing scripts in configured stages. Disabled means script stages are skipped."
+            "description": "Run local external scripts (Python/JS/Shell) in configured stages. Scripts run as subprocesses; disabled means script stages are skipped."
           },
           "postAsrPath": {
             "title": "APP Script Path: After Transcription",
@@ -633,9 +633,9 @@
             "title": "Script Test",
             "description": "Run one manual script call for ASR or post-processing stage and inspect the real output.",
             "inputLabel": "Test Input",
-            "defaultInput": "First, control sugar. Second, sleep early. Third, keep exercising.",
-            "defaultInputAsr": "Well, first, control sugar. Second, sleep early. Third, keep exercising.",
-            "defaultInputLlm": "First, control sugar. Second, sleep early. Third, keep exercising.",
+            "defaultInput": "Let's set today's plan: first, reduce sugar; second, sleep earlier; third, exercise three times a week. Keep HANDY, 0.8B/2B/4B, and https://example.com unchanged.",
+            "defaultInputAsr": "Uh, here are the key points: first reduce sugar, second sleep early, third keep exercising; model tags are 0.8B, 2B, and 4B, and wording should stay intact.",
+            "defaultInputLlm": "Please polish this into clear Chinese with Markdown list points: control sugar, sleep early, exercise three times weekly, compare 0.8B/2B/4B, keep HANDY and https://example.com unchanged.",
             "inputPlaceholder": "Type any sample text to test script replacement...",
             "asrButton": "Test Script: After Transcription",
             "llmButton": "Test Script: After Post-Process Model",
@@ -804,7 +804,14 @@
     "checkForUpdates": "Check for updates",
     "portableUpdateTitle": "Manual update required",
     "portableUpdateMessage": "Portable installs cannot be updated automatically. To update: download the latest NSIS installer from GitHub Releases, install it to the same folder, then copy your Data/ folder (settings, models, recordings) from the old version to the new one.",
-    "portableUpdateButton": "Open GitHub Releases"
+    "portableUpdateButton": "Open GitHub Releases",
+    "postProcess": {
+      "providerUnknown": "Unknown provider",
+      "notConfigured": "No model selected",
+      "localSummary": "Post-process: {{model}}",
+      "remoteSummary": "Post-process: {{provider}} · {{model}}",
+      "tooltip": "Post-process model ({{provider}}): {{model}}"
+    }
   },
   "common": {
     "loading": "Loading...",

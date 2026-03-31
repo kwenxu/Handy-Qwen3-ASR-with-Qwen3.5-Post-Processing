@@ -400,11 +400,11 @@
       "scriptBlocks": {
         "asr": {
           "title": "步骤 3 · APP 处理脚本（转录后）",
-          "description": "配置“转录后脚本阶段”的脚本路径、导入导出与测试。"
+          "description": "配置“转录后脚本阶段”的外部可插拔脚本（Python/JS/Shell）。该脚本在运行时调用，不会内嵌编译进 APP。"
         },
         "llm": {
           "title": "步骤 5 · APP 处理脚本（后处理模型后）",
-          "description": "配置“后处理模型后脚本阶段”的脚本路径、导入导出与测试。"
+          "description": "配置“后处理模型后脚本阶段”的外部可插拔脚本（Python/JS/Shell）。该脚本在运行时调用，不会内嵌编译进 APP。"
         }
       },
       "outputStage": {
@@ -594,7 +594,7 @@
           "title": "APP 处理脚本（极客）",
           "enabled": {
             "title": "启用 APP 处理脚本",
-            "description": "在配置阶段执行本地 APP 处理脚本。关闭后将跳过这些脚本阶段。"
+            "description": "在配置阶段执行本地外部脚本（Python/JS/Shell）。脚本通过子进程运行，关闭后将跳过这些脚本阶段。"
           },
           "postAsrPath": {
             "title": "APP 脚本路径：转录后",
@@ -633,9 +633,9 @@
             "title": "脚本测试",
             "description": "对 ASR 阶段或后处理阶段手动执行一次真实脚本调用，并查看输出结果。",
             "inputLabel": "测试输入",
-            "defaultInput": "我们第一点要控糖，第二点要早睡，第三点要运动。",
-            "defaultInputAsr": "嗯我们第一点要控糖，第二点要早睡，第三点要运动。",
-            "defaultInputLlm": "我们第一点要控糖，第二点要早睡，第三点要运动。",
+            "defaultInput": "嗯我们今天先定一下计划：第一点控糖，第二点早睡，第三点每周运动三次。另外 HANDY 的后处理要稳定，模型先用 0.8B，再对比 2B 和 4B，URL 保持原样 https://example.com。",
+            "defaultInputAsr": "嗯那个我们先说重点哈：第一点控糖，第二点早睡，第三点运动；然后这个版本号是 0.8B、2B、4B，不要写错，另外一些词不要被改坏。",
+            "defaultInputLlm": "请整理为清晰中文：第一点控糖；第二点早睡；第三点每周运动三次；另外比较 0.8B、2B、4B 的表现，并保留 HANDY 与 https://example.com 原样。",
             "inputPlaceholder": "输入任意示例文本用于测试脚本替换...",
             "asrButton": "测试脚本：转录后",
             "llmButton": "测试脚本：后处理模型后",
@@ -804,7 +804,14 @@
     "checkForUpdates": "检查更新",
     "portableUpdateTitle": "Manual update required",
     "portableUpdateMessage": "Portable installs cannot be updated automatically. To update: download the latest NSIS installer from GitHub Releases, install it to the same folder, then copy your Data/ folder (settings, models, recordings) from the old version to the new one.",
-    "portableUpdateButton": "Open GitHub Releases"
+    "portableUpdateButton": "Open GitHub Releases",
+    "postProcess": {
+      "providerUnknown": "未知提供商",
+      "notConfigured": "未选择模型",
+      "localSummary": "后处理: {{model}}",
+      "remoteSummary": "后处理: {{provider}} · {{model}}",
+      "tooltip": "后处理模型（{{provider}}）: {{model}}"
+    }
   },
   "common": {
     "loading": "加载中...",
