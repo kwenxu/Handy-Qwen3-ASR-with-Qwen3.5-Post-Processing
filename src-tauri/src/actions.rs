@@ -140,6 +140,13 @@ fn template_requests_arabic_digits(prompt_template: &str) -> bool {
         || prompt_template.contains("阿拉伯数字")
 }
 
+fn template_prefers_markdown_list(prompt_template: &str) -> bool {
+    let lowered = prompt_template.to_ascii_lowercase();
+    prompt_template.contains("列表")
+        || lowered.contains("markdown list")
+        || lowered.contains("markdown bullet")
+}
+
 fn is_chinese_digit_char(ch: char) -> bool {
     matches!(
         ch,
@@ -409,17 +416,6 @@ fn normalize_standalone_chinese_digits_to_arabic(input: &str) -> String {
         } else {
             None
         };
-        let mut prev_non_ws = None;
-        let mut k = start;
-        while k > 0 {
-            let ch = chars[k - 1];
-            if !ch.is_whitespace() {
-                prev_non_ws = Some(ch);
-                break;
-            }
-            k -= 1;
-        }
-
         let next = chars.get(end).copied();
         let mut next_non_ws = None;
         let mut j = end;
@@ -438,15 +434,19 @@ fn normalize_standalone_chinese_digits_to_arabic(input: &str) -> String {
         // - Convert single-digit list items (e.g. 一、二、三、四).
         let prev_is_cjk = prev.is_some_and(is_cjk_non_digit_char);
         let next_is_cjk = next.is_some_and(is_cjk_non_digit_char);
+        let next_is_list_sep = next.is_some_and(is_list_separator_char)
+            || next_non_ws.is_some_and(is_list_separator_char);
+        let prev_is_list_sep = prev.is_some_and(is_list_separator_char);
         let should_convert = if seq_len >= 2 {
             true
-        } else if prev_is_cjk && next_is_cjk {
+        } else if next_is_list_sep {
+            true
+        } else if prev_is_list_sep && !next_is_cjk {
+            true
+        } else if prev_is_cjk || next_is_cjk {
             false
         } else {
-            prev.is_some_and(is_list_separator_char)
-                || next.is_some_and(is_list_separator_char)
-                || prev_non_ws.is_some_and(is_list_separator_char)
-                || next_non_ws.is_some_and(|ch| ch.is_ascii_alphanumeric())
+            next_non_ws.is_some_and(|ch| ch.is_ascii_alphanumeric())
         };
 
         if should_convert {
@@ -473,6 +473,214 @@ fn build_user_prompt_content(prompt_template: &str, transcription: &str) -> Stri
             transcription
         )
     }
+}
+
+fn chinese_ordinal_digit_value(ch: char) -> Option<usize> {
+    match ch {
+        '一' => Some(1),
+        '二' | '两' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
+fn parse_chinese_or_ascii_ordinal_token(token: &[char]) -> Option<usize> {
+    if token.is_empty() {
+        return None;
+    }
+
+    if token.iter().all(|ch| ch.is_ascii_digit()) {
+        let s: String = token.iter().collect();
+        return s.parse::<usize>().ok();
+    }
+
+    // Support simple Chinese ordinals commonly seen in speech:
+    // 一..九, 十, 十一..十九, 二十..九十九, 两十...
+    if token.len() == 1 {
+        if token[0] == '十' {
+            return Some(10);
+        }
+        return chinese_ordinal_digit_value(token[0]);
+    }
+
+    if let Some(pos) = token.iter().position(|ch| *ch == '十') {
+        let tens = if pos == 0 {
+            1
+        } else {
+            chinese_ordinal_digit_value(token[0])?
+        };
+        let ones = if pos + 1 < token.len() {
+            chinese_ordinal_digit_value(token[pos + 1])?
+        } else {
+            0
+        };
+        return Some(tens * 10 + ones);
+    }
+
+    None
+}
+
+fn has_markdown_ordered_list_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let mut chars = trimmed.chars().peekable();
+        let mut saw_digit = false;
+        while let Some(ch) = chars.peek().copied() {
+            if ch.is_ascii_digit() {
+                saw_digit = true;
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if !saw_digit {
+            return false;
+        }
+        matches!(chars.next(), Some('.'))
+    })
+}
+
+fn find_first_sentence_end(s: &str) -> Option<(usize, usize)> {
+    for (idx, ch) in s.char_indices() {
+        if matches!(ch, '。' | '！' | '？' | ';' | '；') {
+            return Some((idx, ch.len_utf8()));
+        }
+    }
+    None
+}
+
+fn enforce_ordered_list_for_explicit_points(text: &str) -> String {
+    if has_markdown_ordered_list_line(text) {
+        return text.to_string();
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut markers: Vec<(usize, usize, usize)> = Vec::new(); // (start_idx, content_start_idx, num)
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] != '第' {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        let mut j = i + 1;
+        while j < chars.len()
+            && (chars[j].is_ascii_digit()
+                || matches!(
+                    chars[j],
+                    '一' | '二' | '两' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十'
+                ))
+        {
+            j += 1;
+        }
+
+        if j <= i + 1 || j >= chars.len() || chars[j] != '点' {
+            i += 1;
+            continue;
+        }
+
+        if let Some(num) = parse_chinese_or_ascii_ordinal_token(&chars[i + 1..j]) {
+            let mut content_start = j + 1;
+            while content_start < chars.len()
+                && (chars[content_start].is_whitespace()
+                    || matches!(chars[content_start], '，' | ',' | ':' | '：'))
+            {
+                content_start += 1;
+            }
+            markers.push((start, content_start, num));
+            i = j + 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if markers.len() < 2 {
+        return text.to_string();
+    }
+
+    let to_byte = |char_idx: usize| -> usize {
+        chars[..char_idx]
+            .iter()
+            .map(|c| c.len_utf8())
+            .sum::<usize>()
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut suffix = String::new();
+
+    for idx in 0..markers.len() {
+        let (_, content_start_idx, num) = markers[idx];
+        let content_end_idx = if idx + 1 < markers.len() {
+            markers[idx + 1].0
+        } else {
+            chars.len()
+        };
+
+        let start_b = to_byte(content_start_idx);
+        let end_b = to_byte(content_end_idx);
+        let raw_segment = text[start_b..end_b].trim();
+        if raw_segment.is_empty() {
+            continue;
+        }
+
+        let (point_text, trailing_suffix) = if idx + 1 == markers.len() {
+            if let Some((end_pos, end_ch_len)) = find_first_sentence_end(raw_segment) {
+                let point = raw_segment[..end_pos + end_ch_len].trim();
+                let tail = raw_segment[end_pos + end_ch_len..].trim();
+                (point, tail)
+            } else {
+                (raw_segment, "")
+            }
+        } else {
+            (raw_segment, "")
+        };
+
+        let mut point = point_text
+            .trim_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '，' | ',' | '。' | ';' | '；' | ':' | '：')
+            })
+            .trim()
+            .to_string();
+        point = point
+            .trim_start_matches("的话，")
+            .trim_start_matches("的话")
+            .trim_start_matches("，")
+            .trim_start()
+            .to_string();
+        if point.is_empty() {
+            continue;
+        }
+        lines.push(format!("{}. {}", num, point));
+
+        if idx + 1 == markers.len() && !trailing_suffix.is_empty() {
+            suffix = trailing_suffix.to_string();
+        }
+    }
+
+    if lines.len() < 2 {
+        return text.to_string();
+    }
+
+    let prefix = text[..to_byte(markers[0].0)].trim();
+    let mut out = String::new();
+    if !prefix.is_empty() {
+        out.push_str(prefix);
+        out.push('\n');
+    }
+    out.push_str(&lines.join("\n"));
+    if !suffix.is_empty() {
+        out.push('\n');
+        out.push_str(suffix.trim());
+    }
+    out.trim().to_string()
 }
 
 fn has_meaningful_text(input: &str) -> bool {
@@ -516,31 +724,59 @@ fn trim_rule_prefix(line: &str) -> &str {
 }
 
 fn extract_template_rule_keys(prompt_template: &str) -> Vec<String> {
-    prompt_template
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.contains("${output}"))
-        .filter(|line| {
-            !matches!(
-                *line,
-                "Input:"
-                    | "输入："
-                    | "输入:"
-                    | "Transcript:"
-                    | "Rules:"
-                    | "规则："
-                    | "规则:"
-                    | "要求："
-                    | "要求:"
-                    | "Task:"
-                    | "任务："
-            )
-        })
-        .map(trim_rule_prefix)
-        .map(normalize_for_compare)
-        .filter(|key| key.len() >= 6)
-        .collect()
+    let mut keys = Vec::new();
+    let mut in_examples = false;
+
+    for raw_line in prompt_template.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let line_lower = line.to_ascii_lowercase();
+        if line.starts_with("示例") || line_lower.starts_with("example") {
+            // Example blocks often contain valid output sentences.
+            // Do not treat those lines as instruction template keys.
+            in_examples = true;
+            continue;
+        }
+        if in_examples {
+            continue;
+        }
+
+        if line.contains("${output}") {
+            continue;
+        }
+
+        if matches!(
+            line,
+            "Input:"
+                | "输入："
+                | "输入:"
+                | "Transcript:"
+                | "Output:"
+                | "输出："
+                | "输出:"
+                | "Rules:"
+                | "规则："
+                | "规则:"
+                | "要求："
+                | "要求:"
+                | "Task:"
+                | "任务："
+                | "目标："
+                | "目标:"
+        ) {
+            continue;
+        }
+
+        let key = normalize_for_compare(trim_rule_prefix(line));
+        if key.len() >= 6 {
+            keys.push(key);
+        }
+    }
+
+    keys
 }
 
 fn looks_like_instruction_template_line(line: &str, template_keys: &[String]) -> bool {
@@ -639,7 +875,57 @@ fn normalize_post_process_candidate(
         cleaned = normalize_mixed_chinese_unit_numbers_to_arabic(&cleaned);
         cleaned = normalize_standalone_chinese_digits_to_arabic(&cleaned);
     }
+    if template_prefers_markdown_list(prompt_template) {
+        cleaned = enforce_ordered_list_for_explicit_points(&cleaned);
+    }
     cleaned.trim().to_string()
+}
+
+fn normalize_source_for_contract(source_text: &str, force_arabic_digits: bool) -> String {
+    let mut normalized = strip_invisible_chars(source_text).trim().to_string();
+    if force_arabic_digits {
+        normalized = normalize_mixed_chinese_unit_numbers_to_arabic(&normalized);
+        normalized = normalize_standalone_chinese_digits_to_arabic(&normalized);
+    }
+    normalized
+}
+
+fn apply_source_aware_contract_fallback(
+    candidate: &str,
+    source_text: &str,
+    prompt_template: &str,
+    force_arabic_digits: bool,
+) -> String {
+    let mut output = candidate.trim().to_string();
+    if output.is_empty() {
+        return output;
+    }
+
+    // If the template asks for list behavior and source has explicit numbered points,
+    // but model output dropped the structure, rebuild from source deterministically.
+    if template_prefers_markdown_list(prompt_template) && !has_markdown_ordered_list_line(&output) {
+        let source_normalized = normalize_source_for_contract(source_text, force_arabic_digits);
+        let source_list = enforce_ordered_list_for_explicit_points(&source_normalized);
+        if has_markdown_ordered_list_line(&source_list) {
+            debug!(
+                "Applying source-aware ordered-list fallback because model output dropped explicit points"
+            );
+            output = source_list;
+        }
+    }
+
+    output
+}
+
+fn is_suspiciously_short_relative_to_source(output: &str, source_text: &str) -> bool {
+    let informative_count = |s: &str| {
+        s.chars()
+            .filter(|ch| ch.is_alphanumeric() || ('\u{4E00}'..='\u{9FFF}').contains(ch))
+            .count()
+    };
+    let src = informative_count(source_text);
+    let out = informative_count(output);
+    src >= 24 && out <= 3
 }
 
 fn reject_post_output_reason(output: &str, prompt_template: &str) -> Option<&'static str> {
@@ -823,20 +1109,34 @@ async fn post_process_transcription(
                 &local_prompt_template,
                 local_force_arabic_digits,
             );
+            let first_final = apply_source_aware_contract_fallback(
+                &first_clean,
+                &local_text,
+                &local_prompt_template,
+                local_force_arabic_digits,
+            );
             debug!(
                 "Local Qwen3.5 first pass: raw_len={}, clean_len={}, clean_preview='{}'",
                 first.len(),
-                first_clean.len(),
-                preview_for_log(&first_clean, 120)
+                first_final.len(),
+                preview_for_log(&first_final, 120)
             );
 
-            if !should_reject_post_output(&first_clean, &local_prompt_template) {
-                return Ok(first_clean);
+            if !should_reject_post_output(&first_final, &local_prompt_template)
+                && !is_suspiciously_short_relative_to_source(&first_final, &local_text)
+            {
+                return Ok(first_final);
             }
             if let Some(reason) = reject_post_output_reason(&first_clean, &local_prompt_template) {
                 warn!(
                     "Local Qwen3.5 first pass rejected (reason={}, template_id={})",
                     reason, local_template_id
+                );
+            }
+            if is_suspiciously_short_relative_to_source(&first_final, &local_text) {
+                warn!(
+                    "Local Qwen3.5 first pass rejected (reason=too_short_relative_to_source, template_id={})",
+                    local_template_id
                 );
             }
 
@@ -859,20 +1159,48 @@ async fn post_process_transcription(
                 &local_prompt_template,
                 local_force_arabic_digits,
             );
+            let second_final = apply_source_aware_contract_fallback(
+                &second_clean,
+                &local_text,
+                &local_prompt_template,
+                local_force_arabic_digits,
+            );
             debug!(
                 "Local Qwen3.5 second pass: raw_len={}, clean_len={}, clean_preview='{}'",
                 second.len(),
-                second_clean.len(),
-                preview_for_log(&second_clean, 120)
+                second_final.len(),
+                preview_for_log(&second_final, 120)
             );
-            if !should_reject_post_output(&second_clean, &local_prompt_template) {
-                return Ok(second_clean);
+            if !should_reject_post_output(&second_final, &local_prompt_template)
+                && !is_suspiciously_short_relative_to_source(&second_final, &local_text)
+            {
+                return Ok(second_final);
             }
             if let Some(reason) = reject_post_output_reason(&second_clean, &local_prompt_template) {
                 warn!(
                     "Local Qwen3.5 second pass rejected (reason={}, template_id={})",
                     reason, local_template_id
                 );
+            }
+            if is_suspiciously_short_relative_to_source(&second_final, &local_text) {
+                warn!(
+                    "Local Qwen3.5 second pass rejected (reason=too_short_relative_to_source, template_id={})",
+                    local_template_id
+                );
+            }
+
+            let source_fallback = apply_source_aware_contract_fallback(
+                &normalize_source_for_contract(&local_text, local_force_arabic_digits),
+                &local_text,
+                &local_prompt_template,
+                local_force_arabic_digits,
+            );
+            if !source_fallback.trim().is_empty() {
+                warn!(
+                    "Local Qwen3.5 both passes rejected; using deterministic source fallback (template_id={})",
+                    local_template_id
+                );
+                return Ok(source_fallback);
             }
 
             Err(anyhow::anyhow!(
@@ -954,6 +1282,12 @@ async fn post_process_transcription(
                                 &prompt_template_for_post,
                                 force_arabic_digits,
                             );
+                            let result = apply_source_aware_contract_fallback(
+                                &result,
+                                &transcription_text,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
                             debug!(
                                 "Apple Intelligence post-processing succeeded. Output length: {} chars",
                                 result.len()
@@ -1010,6 +1344,12 @@ async fn post_process_transcription(
                                 &prompt_template_for_post,
                                 force_arabic_digits,
                             );
+                            let result = apply_source_aware_contract_fallback(
+                                &result,
+                                &transcription_text,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
                             if should_reject_post_output(&result, &prompt_template_for_post) {
                                 warn!("Structured post-processing output rejected by validators");
                                 return None;
@@ -1027,6 +1367,12 @@ async fn post_process_transcription(
                                 &prompt_template_for_post,
                                 force_arabic_digits,
                             );
+                            let cleaned = apply_source_aware_contract_fallback(
+                                &cleaned,
+                                &transcription_text,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                            );
                             if should_reject_post_output(&cleaned, &prompt_template_for_post) {
                                 warn!("Structured raw content rejected by validators");
                                 return None;
@@ -1041,6 +1387,12 @@ async fn post_process_transcription(
                         );
                         let cleaned = normalize_post_process_candidate(
                             &content,
+                            &prompt_template_for_post,
+                            force_arabic_digits,
+                        );
+                        let cleaned = apply_source_aware_contract_fallback(
+                            &cleaned,
+                            &transcription_text,
                             &prompt_template_for_post,
                             force_arabic_digits,
                         );
@@ -1081,6 +1433,12 @@ async fn post_process_transcription(
         Ok(Some(content)) => {
             let content = normalize_post_process_candidate(
                 &content,
+                &prompt_template_for_post,
+                force_arabic_digits,
+            );
+            let content = apply_source_aware_contract_fallback(
+                &content,
+                &transcription_text,
                 &prompt_template_for_post,
                 force_arabic_digits,
             );
@@ -1559,7 +1917,9 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_mixed_chinese_unit_numbers_to_arabic, normalize_post_process_candidate,
+        apply_source_aware_contract_fallback, enforce_ordered_list_for_explicit_points,
+        is_suspiciously_short_relative_to_source, normalize_mixed_chinese_unit_numbers_to_arabic,
+        normalize_post_process_candidate,
         normalize_standalone_chinese_digits_to_arabic, template_requests_arabic_digits,
     };
 
@@ -1596,6 +1956,13 @@ mod tests {
     }
 
     #[test]
+    fn keeps_semantic_single_digit_phrase_even_after_comma() {
+        let input = "我们先说一段话，一大段前置的话去说一说。";
+        let output = normalize_standalone_chinese_digits_to_arabic(input);
+        assert_eq!(output, "我们先说一段话，一大段前置的话去说一说。");
+    }
+
+    #[test]
     fn converts_mixed_chinese_unit_numbers() {
         let input = "三十2、1百五十四、十二、两百零三。";
         let output = normalize_mixed_chinese_unit_numbers_to_arabic(input);
@@ -1615,5 +1982,55 @@ mod tests {
         let raw = "1. 保持原意与事实：请提供关于“两个东西”的具体信息。\n2. 去除口头重复、语气词和明显噪音：简化表达。\n请帮我看看这两个东西是什么。";
         let output = normalize_post_process_candidate(raw, prompt, false);
         assert_eq!(output, "请帮我看看这两个东西是什么。");
+    }
+
+    #[test]
+    fn keeps_valid_text_even_if_it_matches_example_output_line() {
+        let prompt = "请将下面的转录文本做“中文口语整理”，不要翻译。\n\n输入：\n${output}\n\n执行规则：\n1. 仅输出最终文本，不解释。\n\n示例：\n输入：这个吧，嗯，我也不知道怎么说，就是感觉不是特别好。\n输出：整体感觉不是特别好。";
+        let raw = "整体感觉不是特别好。";
+        let output = normalize_post_process_candidate(raw, prompt, false);
+        assert_eq!(output, "整体感觉不是特别好。");
+    }
+
+    #[test]
+    fn enforces_ordered_list_for_explicit_numbered_points() {
+        let input = "现在开始说重点。第一点，把这个东西展示给别人。第二点的话，我们做特色功能。第三点的话，保证基本效果。后面再看结果。";
+        let output = enforce_ordered_list_for_explicit_points(input);
+        assert_eq!(
+            output,
+            "现在开始说重点。\n1. 把这个东西展示给别人\n2. 我们做特色功能\n3. 保证基本效果\n后面再看结果。"
+        );
+    }
+
+    #[test]
+    fn normalize_candidate_handles_long_real_world_case() {
+        let prompt = "请将下面的转录文本做中文后处理与排版，不要翻译。内容是多点信息时用 Markdown 列表整理。中文数字按语义转阿拉伯数字。";
+        let raw = "现在我来试试效果吧。我们先说一段话，一大段前置的话去说一说。我不知道我们应该说什么，就慢慢的聊天吧。就比如说我们当前所做的这些东西，要面试的时候应该怎么说呢？按理来说，我们应该把完整的流程去展现出来吧。就比如说我们第一点，把这个东西展示给别人。第二点的话，我们想要就是做这些特色功能，对吧？那肯定特色功能要弄出去啊。第三点的话，就是保证这个基本效果要说过去，最起码可以用在生产上吧。当前我不知道我们这种效果，我非常不相信这个二B 的这个东西啊。我不知道最终效果是什么，我们来看看吧。";
+        let out = normalize_post_process_candidate(raw, prompt, true);
+
+        assert!(out.contains("一大段前置的话去说一说"));
+        assert!(out.contains("1. 把这个东西展示给别人"));
+        assert!(out.contains("2. 我们想要就是做这些特色功能"));
+        assert!(out.contains("3."));
+        assert!(out.contains("基本效果要说过去"));
+        assert!(out.contains("2B"));
+    }
+
+    #[test]
+    fn source_aware_fallback_recovers_explicit_numbered_points() {
+        let prompt = "请做中文整理。出现第一点第二点第三点时必须使用 Markdown 列表。";
+        let source = "先说一句前置。第一点，把这个东西展示给别人。第二点的话，我们做特色功能。第三点的话，保证基本效果。后面再看结果。";
+        let model_output = "先说一句前置。我们先把事情讲清楚，后面再看结果。";
+        let out = apply_source_aware_contract_fallback(model_output, source, prompt, true);
+        assert!(out.contains("1. 把这个东西展示给别人"));
+        assert!(out.contains("2. 我们做特色功能"));
+        assert!(out.contains("3. 保证基本效果"));
+    }
+
+    #[test]
+    fn short_garbage_is_detected_against_long_source() {
+        let source = "我先说一大段内容，包含很多细节和多个信息点，后面还会继续补充。";
+        assert!(is_suspiciously_short_relative_to_source("aa", source));
+        assert!(!is_suspiciously_short_relative_to_source("好", "好"));
     }
 }
