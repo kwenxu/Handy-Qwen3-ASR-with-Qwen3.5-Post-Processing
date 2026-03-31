@@ -359,8 +359,8 @@
       "title": "性能",
       "groups": {
         "pipeline": "流程总览与 APP 处理脚本",
-        "transcription": "阶段 A · 转录模型",
-        "postProcessing": "阶段 B · 后处理模型"
+        "transcription": "步骤 2 · 转录模型",
+        "postProcessing": "步骤 4 · 后处理模型"
       },
       "pipeline": {
         "title": "运行流程图（模型阶段 vs APP 脚本阶段）",
@@ -622,10 +622,10 @@
           },
           "templates": {
             "title": "默认模板",
-            "description": "将内置脚本模板导出到应用数据目录，或恢复为默认模板。",
+            "description": "将脚本模板恢复为内置默认内容。",
             "exportButton": "导出模板",
             "restoreButton": "恢复默认模板",
-            "hint": "导出仅在文件缺失时写入；恢复会覆盖已有模板文件。",
+            "hint": "恢复会覆盖当前模板文件，并同步更新对应脚本路径。",
             "exportSuccess": "模板导出完成。目录：{{dir}}",
             "restoreSuccess": "模板已恢复为默认。目录：{{dir}}"
           },
@@ -633,6 +633,9 @@
             "title": "脚本测试",
             "description": "对 ASR 阶段或后处理阶段手动执行一次真实脚本调用，并查看输出结果。",
             "inputLabel": "测试输入",
+            "defaultInput": "我们第一点要控糖，第二点要早睡，第三点要运动。",
+            "defaultInputAsr": "嗯我们第一点要控糖，第二点要早睡，第三点要运动。",
+            "defaultInputLlm": "我们第一点要控糖，第二点要早睡，第三点要运动。",
             "inputPlaceholder": "输入任意示例文本用于测试脚本替换...",
             "asrButton": "测试脚本：转录后",
             "llmButton": "测试脚本：后处理模型后",

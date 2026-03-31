@@ -47,11 +47,11 @@ export const SECTIONS_CONFIG = {
     component: GeneralSettings,
     enabled: () => true,
   },
-  postprocessing: {
-    labelKey: "sidebar.postProcessing",
-    icon: Sparkles,
-    component: PostProcessingSettings,
-    enabled: (settings) => settings?.post_process_enabled ?? false,
+  performance: {
+    labelKey: "sidebar.performance",
+    icon: Gauge,
+    component: PerformanceSettings,
+    enabled: () => true,
   },
   models: {
     labelKey: "sidebar.models",
@@ -59,11 +59,11 @@ export const SECTIONS_CONFIG = {
     component: ModelsSettings,
     enabled: () => true,
   },
-  performance: {
-    labelKey: "sidebar.performance",
-    icon: Gauge,
-    component: PerformanceSettings,
-    enabled: () => true,
+  postprocessing: {
+    labelKey: "sidebar.postProcessing",
+    icon: Sparkles,
+    component: PostProcessingSettings,
+    enabled: (settings) => settings?.post_process_enabled ?? false,
   },
   advanced: {
     labelKey: "sidebar.advanced",

@@ -546,6 +546,12 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
   const showLlmStage = scope === "all" || scope === "llm";
   const showGlobalSection = scope !== "llm";
   const showTemplateSection = scope !== "asr";
+  const defaultSampleInput =
+    scope === "asr"
+      ? t("settings.postProcessing.api.scriptHooks.test.defaultInputAsr")
+      : scope === "llm"
+        ? t("settings.postProcessing.api.scriptHooks.test.defaultInputLlm")
+        : t("settings.postProcessing.api.scriptHooks.test.defaultInput");
 
   const scriptHooksEnabled = getSetting("script_hooks_enabled") ?? false;
   const currentPostAsrScriptPath = (
@@ -567,13 +573,12 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
   const [scriptHookTimeoutDraft, setScriptHookTimeoutDraft] = useState(
     String(currentScriptHookTimeoutMs),
   );
-  const [sampleInputDraft, setSampleInputDraft] = useState("");
+  const [sampleInputDraft, setSampleInputDraft] = useState(defaultSampleInput);
   const [sampleOutput, setSampleOutput] = useState("");
   const [statusMessage, setStatusMessage] = useState<{
     variant: "error" | "success" | "info";
     text: string;
   } | null>(null);
-  const [isExportingTemplates, setIsExportingTemplates] = useState(false);
   const [isRestoringTemplates, setIsRestoringTemplates] = useState(false);
   const [testingStage, setTestingStage] = useState<"asr_post" | "llm_post" | null>(
     null,
@@ -635,38 +640,6 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
     await updateSetting("post_llm_script_path", postLlmPath);
     setPostAsrScriptPathDraft(postAsrPath);
     setPostLlmScriptPathDraft(postLlmPath);
-  };
-
-  const handleExportTemplates = async () => {
-    setIsExportingTemplates(true);
-    setStatusMessage(null);
-    try {
-      const result = await commands.exportDefaultScriptHookTemplates();
-      if (result.status === "ok") {
-        await applyTemplatePaths(
-          result.data.post_asr_script_path,
-          result.data.post_llm_script_path,
-        );
-        setStatusMessage({
-          variant: "success",
-          text: t("settings.postProcessing.api.scriptHooks.templates.exportSuccess", {
-            dir: result.data.directory,
-          }),
-        });
-      } else {
-        setStatusMessage({
-          variant: "error",
-          text: String(result.error),
-        });
-      }
-    } catch (error) {
-      setStatusMessage({
-        variant: "error",
-        text: String(error),
-      });
-    } finally {
-      setIsExportingTemplates(false);
-    }
   };
 
   const handleRestoreTemplates = async () => {
@@ -1012,18 +985,10 @@ const PostProcessingSettingsScriptHooksComponent: React.FC<
         >
           <div className="flex flex-wrap gap-2">
             <Button
-              onClick={handleExportTemplates}
-              variant="secondary"
-              size="md"
-              disabled={isExportingTemplates || isRestoringTemplates}
-            >
-              {t("settings.postProcessing.api.scriptHooks.templates.exportButton")}
-            </Button>
-            <Button
               onClick={handleRestoreTemplates}
               variant="secondary"
               size="md"
-              disabled={isExportingTemplates || isRestoringTemplates}
+              disabled={isRestoringTemplates}
             >
               {t("settings.postProcessing.api.scriptHooks.templates.restoreButton")}
             </Button>

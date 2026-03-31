@@ -297,11 +297,11 @@ export const PerformanceSettings: React.FC = () => {
   const { getSetting, updateSetting, isUpdating } = useSettings();
   const [openBlocks, setOpenBlocks] = useState<Record<PerfBlockKey, boolean>>({
     pipeline: true,
-    transcription: true,
-    asrScript: true,
-    postProcessing: true,
-    llmScript: true,
-    output: true,
+    transcription: false,
+    asrScript: false,
+    postProcessing: false,
+    llmScript: false,
+    output: false,
   });
 
   const preloadStrategy =

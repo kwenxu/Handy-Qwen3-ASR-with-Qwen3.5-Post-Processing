@@ -359,8 +359,8 @@
       "title": "Performance",
       "groups": {
         "pipeline": "Pipeline & APP Processing Scripts",
-        "transcription": "Stage A · Transcription Model",
-        "postProcessing": "Stage B · Post-Processing Model"
+        "transcription": "Step 2 · Transcription Model",
+        "postProcessing": "Step 4 · Post-Processing Model"
       },
       "pipeline": {
         "title": "Runtime Pipeline (Model vs APP Script)",
@@ -622,10 +622,10 @@
           },
           "templates": {
             "title": "Default Templates",
-            "description": "Export built-in script templates to your app data folder, or restore them to defaults.",
+            "description": "Restore built-in script templates for this stage.",
             "exportButton": "Export Templates",
             "restoreButton": "Restore Templates",
-            "hint": "Export writes files only when missing. Restore overwrites existing templates.",
+            "hint": "Restore overwrites current template files and syncs stage script paths.",
             "exportSuccess": "Templates exported. Directory: {{dir}}",
             "restoreSuccess": "Templates restored to defaults. Directory: {{dir}}"
           },
@@ -633,6 +633,9 @@
             "title": "Script Test",
             "description": "Run one manual script call for ASR or post-processing stage and inspect the real output.",
             "inputLabel": "Test Input",
+            "defaultInput": "First, control sugar. Second, sleep early. Third, keep exercising.",
+            "defaultInputAsr": "Well, first, control sugar. Second, sleep early. Third, keep exercising.",
+            "defaultInputLlm": "First, control sugar. Second, sleep early. Third, keep exercising.",
             "inputPlaceholder": "Type any sample text to test script replacement...",
             "asrButton": "Test Script: After Transcription",
             "llmButton": "Test Script: After Post-Process Model",
