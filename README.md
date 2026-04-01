@@ -1,7 +1,8 @@
 # 本Fork更新
 
-- 添加mac的mlx模型：[Qwen3-ASR-0.6B-8bit](https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit)、[Qwen3-ASR-1.7B-8bit](https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-8bit)
-- 加快上述模型的第一次转录
+「20260401」
+1、加入本地后处理，python+mlx，把qwen3.5的0.8B、2B、4B、9B，本地直接可用；
+2、规范流程，暴露系统提示词、参数、转录与后处理的外置替换脚本（dev）；
 
 ---
 
