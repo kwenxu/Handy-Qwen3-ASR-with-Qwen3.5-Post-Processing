@@ -422,8 +422,8 @@
           "title": "External Script Template Defaults (After Transcription)",
           "description": "The exported ASR-stage template includes these two defaults.",
           "items": {
-            "item1": "Custom-word correction (based on your own dictionary/rules).",
-            "item2": "Filler/noise filtering tuned by language and scenario."
+            "item1": "Repetition suppression (repeated chars / repeated patterns / repeated lines).",
+            "item2": "Basic noise cleanup and whitespace normalization (including common aaaa noise tokens)."
           }
         },
         "llmBuiltin": {
@@ -439,8 +439,8 @@
           "title": "External Script Template Defaults (After Post-Process Model)",
           "description": "The exported post-process-stage template includes these two defaults.",
           "items": {
-            "item1": "Template leakage cleanup (e.g. echoed 'Rules/Input/Requirements').",
-            "item2": "Numeric normalization and mixed-form conversion (e.g. '三十2 -> 32', '1百五十四 -> 154')."
+            "item1": "Template leakage cleanup (echoed Rules/Input/Requirements and leaked rule enumerations).",
+            "item2": "Repetition suppression (repeated chars / repeated patterns / repeated lines) and whitespace normalization."
           }
         }
       },

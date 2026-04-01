@@ -55,7 +55,139 @@ const DEFAULT_ASR_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
 # stdout: plain text OR JSON {"text":"..."} (recommended)
 # fallback: timeout / error / invalid output -> APP falls back to original text
 import json
+import re
 import sys
+from typing import List, Tuple
+
+
+# ---- Tunable defaults (Toolkit-style anti-hallucination cleanup) ----
+# Repeated-char suppression: "aaaaaaaaaaaa" -> "a"
+CHAR_REPEAT_THRESHOLD = 14
+# Repeated-pattern suppression: "abcabcabcabcabcabc" -> "abc"
+PATTERN_REPEAT_THRESHOLD = 6
+PATTERN_MAX_LEN = 20
+# Consecutive repeated-line suppression threshold
+LINE_REPEAT_THRESHOLD = 3
+
+NOISE_LATIN_A_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])a{2,}(?:[-—~!！?？]+)?(?![A-Za-z0-9])"
+)
+MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+
+
+def collapse_char_repeats(text: str, threshold: int) -> str:
+    if threshold <= 1 or len(text) < threshold:
+        return text
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        count = 1
+        while i + count < n and text[i + count] == text[i]:
+            count += 1
+        if count > threshold:
+            out.append(text[i])
+        else:
+            out.append(text[i : i + count])
+        i += count
+    return "".join(out)
+
+
+def collapse_pattern_repeats(text: str, threshold: int, max_len: int) -> str:
+    n = len(text)
+    if threshold < 2 or n < threshold * 2:
+        return text
+
+    i = 0
+    out: List[str] = []
+    while i <= n - threshold * 2:
+        found = False
+        for k in range(1, max_len + 1):
+            if i + k * threshold > n:
+                break
+            pattern = text[i : i + k]
+
+            valid = True
+            for rep in range(1, threshold):
+                start = i + rep * k
+                if text[start : start + k] != pattern:
+                    valid = False
+                    break
+            if not valid:
+                continue
+
+            end = i + k * threshold
+            while end + k <= n and text[end : end + k] == pattern:
+                end += k
+            out.append(pattern)
+            i = end
+            found = True
+            break
+
+        if not found:
+            out.append(text[i])
+            i += 1
+
+    if i < n:
+        out.append(text[i:])
+    return "".join(out)
+
+
+def collapse_repeated_lines(text: str, threshold: int) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return text.strip()
+
+    out: List[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        j = i + 1
+        while j < n and lines[j] == lines[i]:
+            j += 1
+        repeats = j - i
+        if repeats >= threshold:
+            out.append(lines[i])
+        else:
+            out.extend(lines[i:j])
+        i = j
+    return "\n".join(out)
+
+
+def normalize_spacing(text: str) -> str:
+    text = text.replace("\u200b", "").replace("\ufeff", "")
+    text = MULTI_SPACE_RE.sub(" ", text)
+    text = MULTI_NEWLINE_RE.sub("\n\n", text)
+    return text.strip()
+
+
+def process_asr_text(text: str) -> Tuple[str, List[str]]:
+    warnings: List[str] = []
+    out = text
+
+    next_out = collapse_char_repeats(out, CHAR_REPEAT_THRESHOLD)
+    if next_out != out:
+        warnings.append("collapse_char_repeats")
+        out = next_out
+
+    next_out = collapse_pattern_repeats(out, PATTERN_REPEAT_THRESHOLD, PATTERN_MAX_LEN)
+    if next_out != out:
+        warnings.append("collapse_pattern_repeats")
+        out = next_out
+
+    next_out = NOISE_LATIN_A_RE.sub(" ", out)
+    if next_out != out:
+        warnings.append("remove_noise_a_tokens")
+        out = next_out
+
+    next_out = collapse_repeated_lines(out, LINE_REPEAT_THRESHOLD)
+    if next_out != out:
+        warnings.append("collapse_repeated_lines")
+        out = next_out
+
+    out = normalize_spacing(out)
+    return out, warnings
 
 
 def main() -> None:
@@ -76,11 +208,8 @@ def main() -> None:
         print(json.dumps({"text": text}, ensure_ascii=False))
         return
 
-    # TODO: customize ASR-stage cleanup rules here.
-    # Example:
-    # text = text.replace("嗯", "").replace("啊", "")
-
-    print(json.dumps({"text": text}, ensure_ascii=False))
+    cleaned, warnings = process_asr_text(text)
+    print(json.dumps({"text": cleaned, "warnings": warnings}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
@@ -95,7 +224,185 @@ const DEFAULT_LLM_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env python3
 # - Built-in fallback: safety and stability guardrail.
 # See the ASR template header for runner mapping and protocol details.
 import json
+import re
 import sys
+from typing import List, Tuple
+
+
+# ---- Tunable defaults ----
+CHAR_REPEAT_THRESHOLD = 14
+PATTERN_REPEAT_THRESHOLD = 6
+PATTERN_MAX_LEN = 20
+LINE_REPEAT_THRESHOLD = 3
+
+RULE_HEADER_RE = re.compile(
+    r"^(要求|规则|输入|输出|目标|task|rules?|input|output|objective)\s*[:：]?$",
+    re.IGNORECASE,
+)
+ENUM_LINE_RE = re.compile(r"^\s*\d+\s*[\.、\)\]]\s*(.*)$")
+MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
+MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+LEAK_KEYWORDS = (
+    "保持原意",
+    "去除口头重复",
+    "专有名词",
+    "仅输出最终结果",
+    "不要解释",
+    "output contract",
+    "return only the final",
+    "do not include reasoning",
+)
+
+
+def collapse_char_repeats(text: str, threshold: int) -> str:
+    if threshold <= 1 or len(text) < threshold:
+        return text
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        count = 1
+        while i + count < n and text[i + count] == text[i]:
+            count += 1
+        if count > threshold:
+            out.append(text[i])
+        else:
+            out.append(text[i : i + count])
+        i += count
+    return "".join(out)
+
+
+def collapse_pattern_repeats(text: str, threshold: int, max_len: int) -> str:
+    n = len(text)
+    if threshold < 2 or n < threshold * 2:
+        return text
+
+    i = 0
+    out: List[str] = []
+    while i <= n - threshold * 2:
+        found = False
+        for k in range(1, max_len + 1):
+            if i + k * threshold > n:
+                break
+            pattern = text[i : i + k]
+
+            valid = True
+            for rep in range(1, threshold):
+                start = i + rep * k
+                if text[start : start + k] != pattern:
+                    valid = False
+                    break
+            if not valid:
+                continue
+
+            end = i + k * threshold
+            while end + k <= n and text[end : end + k] == pattern:
+                end += k
+            out.append(pattern)
+            i = end
+            found = True
+            break
+
+        if not found:
+            out.append(text[i])
+            i += 1
+
+    if i < n:
+        out.append(text[i:])
+    return "".join(out)
+
+
+def collapse_repeated_lines(text: str, threshold: int) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return text.strip()
+
+    out: List[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        j = i + 1
+        while j < n and lines[j] == lines[i]:
+            j += 1
+        repeats = j - i
+        if repeats >= threshold:
+            out.append(lines[i])
+        else:
+            out.extend(lines[i:j])
+        i = j
+    return "\n".join(out)
+
+
+def strip_template_leakage(text: str) -> Tuple[str, bool]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return text.strip(), False
+
+    kept: List[str] = []
+    removed = 0
+    for line in lines:
+        lower = line.lower()
+        if RULE_HEADER_RE.match(line):
+            removed += 1
+            continue
+        if lower in ("input data", "input data:", "canonical transcript data"):
+            removed += 1
+            continue
+        if any(marker in lower for marker in ("begin_transcript", "end_transcript")):
+            removed += 1
+            continue
+        matched = ENUM_LINE_RE.match(line)
+        if matched:
+            body = matched.group(1).strip().lower()
+            if any(key in body for key in LEAK_KEYWORDS):
+                removed += 1
+                continue
+        if any(key in lower for key in LEAK_KEYWORDS):
+            removed += 1
+            continue
+        kept.append(line)
+
+    if kept:
+        return "\n".join(kept), removed > 0
+    return text.strip(), False
+
+
+def normalize_spacing(text: str) -> str:
+    text = text.replace("\u200b", "").replace("\ufeff", "")
+    text = MULTI_SPACE_RE.sub(" ", text)
+    text = MULTI_NEWLINE_RE.sub("\n\n", text)
+    text = text.replace("<think>", "").replace("</think>", "")
+    return text.strip()
+
+
+def process_llm_text(text: str) -> Tuple[str, List[str]]:
+    warnings: List[str] = []
+    out = text
+
+    next_out = collapse_char_repeats(out, CHAR_REPEAT_THRESHOLD)
+    if next_out != out:
+        warnings.append("collapse_char_repeats")
+        out = next_out
+
+    next_out = collapse_pattern_repeats(out, PATTERN_REPEAT_THRESHOLD, PATTERN_MAX_LEN)
+    if next_out != out:
+        warnings.append("collapse_pattern_repeats")
+        out = next_out
+
+    next_out, removed_template = strip_template_leakage(out)
+    if removed_template:
+        warnings.append("strip_template_leakage")
+        out = next_out
+    else:
+        out = next_out
+
+    next_out = collapse_repeated_lines(out, LINE_REPEAT_THRESHOLD)
+    if next_out != out:
+        warnings.append("collapse_repeated_lines")
+        out = next_out
+
+    out = normalize_spacing(out)
+    return out, warnings
 
 
 def main() -> None:
@@ -116,11 +423,8 @@ def main() -> None:
         print(json.dumps({"text": text}, ensure_ascii=False))
         return
 
-    # TODO: customize LLM-stage post-cleaning rules here.
-    # Example (template leakage cleanup):
-    # text = text.replace("要求：", "").replace("规则：", "")
-
-    print(json.dumps({"text": text}, ensure_ascii=False))
+    cleaned, warnings = process_llm_text(text)
+    print(json.dumps({"text": cleaned, "warnings": warnings}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

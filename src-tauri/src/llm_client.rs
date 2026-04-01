@@ -93,18 +93,6 @@ fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<reqwes
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
 }
 
-/// Send a chat completion request to an OpenAI-compatible API
-/// Returns Ok(Some(content)) on success, Ok(None) if response has no content,
-/// or Err on actual errors (HTTP, parsing, etc.)
-pub async fn send_chat_completion(
-    provider: &PostProcessProvider,
-    api_key: String,
-    model: &str,
-    prompt: String,
-) -> Result<Option<String>, String> {
-    send_chat_completion_with_schema(provider, api_key, model, prompt, None, None).await
-}
-
 /// Send a chat completion request with structured output support
 /// When json_schema is provided, uses structured outputs mode
 /// system_prompt is used as the system message when provided
