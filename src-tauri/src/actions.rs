@@ -114,6 +114,76 @@ fn clean_post_process_output(s: &str) -> String {
     out.trim().to_string()
 }
 
+fn cleanup_post_process_spacing(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_space = false;
+    let mut newline_run = 0usize;
+
+    for ch in input.chars() {
+        if ch == '\r' {
+            continue;
+        }
+        if ch == '\n' {
+            while out.ends_with(' ') || out.ends_with('\t') {
+                out.pop();
+            }
+            newline_run = (newline_run + 1).min(2);
+            last_space = false;
+            continue;
+        }
+        if newline_run > 0 {
+            if !out.is_empty() {
+                for _ in 0..newline_run {
+                    out.push('\n');
+                }
+            }
+            newline_run = 0;
+        }
+        if ch == ' ' || ch == '\t' {
+            if !last_space && !out.is_empty() && !out.ends_with('\n') {
+                out.push(' ');
+                last_space = true;
+            }
+            continue;
+        }
+        if matches!(
+            ch,
+            '，' | '。' | '！' | '？' | '；' | '：' | '、' | ',' | '.' | '!' | '?' | ';' | ':'
+        ) && out.ends_with(' ')
+        {
+            out.pop();
+        }
+        out.push(ch);
+        last_space = false;
+    }
+
+    out.trim().to_string()
+}
+
+fn normalize_post_process_text(input: &str, force_arabic_digits: bool) -> String {
+    let mut normalized = strip_invisible_chars(input).trim().to_string();
+    if force_arabic_digits {
+        normalized = normalize_mixed_chinese_unit_numbers_to_arabic(&normalized);
+        normalized = normalize_standalone_chinese_digits_to_arabic(&normalized);
+    }
+    cleanup_post_process_spacing(&normalized)
+}
+
+fn is_informative_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+}
+
+fn informative_char_count(s: &str) -> usize {
+    s.chars().filter(|ch| is_informative_char(*ch)).count()
+}
+
+fn normalized_informative_text(s: &str) -> String {
+    s.chars()
+        .filter(|ch| is_informative_char(*ch))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
 fn preview_for_log(text: &str, max_chars: usize) -> String {
     let normalized = text.replace('\n', "\\n");
     let mut iter = normalized.chars();
@@ -149,6 +219,26 @@ fn template_prefers_markdown_list(prompt_template: &str) -> bool {
 
 fn template_allows_aggressive_compression(prompt_template: &str) -> bool {
     let lowered = prompt_template.to_ascii_lowercase();
+    let explicitly_forbids_summary = prompt_template.contains("不要总结")
+        || prompt_template.contains("不要摘要")
+        || prompt_template.contains("禁止总结")
+        || prompt_template.contains("禁止摘要")
+        || prompt_template.contains("不得总结")
+        || prompt_template.contains("不得摘要")
+        || prompt_template.contains("不做总结")
+        || prompt_template.contains("不做摘要")
+        || prompt_template.contains("不执行摘要")
+        || prompt_template.contains("不执行总结")
+        || prompt_template.contains("不要过度精简")
+        || (prompt_template.contains("不把") && prompt_template.contains("摘要"))
+        || (prompt_template.contains("不是") && prompt_template.contains("摘要"))
+        || lowered.contains("do not summarize")
+        || lowered.contains("don't summarize")
+        || lowered.contains("not summarize")
+        || lowered.contains("no summary");
+    if explicitly_forbids_summary {
+        return false;
+    }
     prompt_template.contains("摘要")
         || prompt_template.contains("总结")
         || prompt_template.contains("概括")
@@ -1035,10 +1125,7 @@ fn normalize_post_process_candidate(
     let mut cleaned = clean_post_process_output(raw_output);
     cleaned = strip_prompt_template_leakage(&cleaned, prompt_template);
     cleaned = collapse_repeated_lines(&cleaned);
-    if force_arabic_digits {
-        cleaned = normalize_mixed_chinese_unit_numbers_to_arabic(&cleaned);
-        cleaned = normalize_standalone_chinese_digits_to_arabic(&cleaned);
-    }
+    cleaned = normalize_post_process_text(&cleaned, force_arabic_digits);
     if template_prefers_markdown_list(prompt_template) {
         cleaned = enforce_ordered_list_for_explicit_points(&cleaned);
     }
@@ -1046,12 +1133,7 @@ fn normalize_post_process_candidate(
 }
 
 fn normalize_source_for_contract(source_text: &str, force_arabic_digits: bool) -> String {
-    let mut normalized = strip_invisible_chars(source_text).trim().to_string();
-    if force_arabic_digits {
-        normalized = normalize_mixed_chinese_unit_numbers_to_arabic(&normalized);
-        normalized = normalize_standalone_chinese_digits_to_arabic(&normalized);
-    }
-    normalized
+    normalize_post_process_text(source_text, force_arabic_digits)
 }
 
 fn apply_source_aware_contract_fallback(
@@ -1061,14 +1143,19 @@ fn apply_source_aware_contract_fallback(
     force_arabic_digits: bool,
 ) -> String {
     let mut output = candidate.trim().to_string();
+    let source_normalized = normalize_source_for_contract(source_text, force_arabic_digits);
+    let source_info = informative_char_count(&source_normalized);
     if output.is_empty() {
+        if source_info > 0 {
+            debug!("Applying source fallback because post-process output is empty");
+            return source_normalized;
+        }
         return output;
     }
 
     // If the template asks for list behavior and source has explicit numbered points,
     // but model output dropped the structure, rebuild from source deterministically.
     if template_prefers_markdown_list(prompt_template) && !has_markdown_ordered_list_line(&output) {
-        let source_normalized = normalize_source_for_contract(source_text, force_arabic_digits);
         let source_list = enforce_ordered_list_for_explicit_points(&source_normalized);
         if has_markdown_ordered_list_line(&source_list) {
             debug!(
@@ -1076,6 +1163,17 @@ fn apply_source_aware_contract_fallback(
             );
             output = source_list;
         }
+    }
+
+    let output_info = informative_char_count(&output);
+    if !template_allows_aggressive_compression(prompt_template)
+        && source_info >= 5
+        && output_info * 100 < source_info * 55
+    {
+        debug!(
+            "Applying source fallback because post-process output lost too much short/medium source content"
+        );
+        return source_normalized;
     }
 
     output
@@ -1086,25 +1184,15 @@ fn is_suspiciously_short_relative_to_source(
     source_text: &str,
     prompt_template: &str,
 ) -> bool {
-    let informative_count = |s: &str| {
-        s.chars()
-            .filter(|ch| ch.is_alphanumeric() || ('\u{4E00}'..='\u{9FFF}').contains(ch))
+    let sentence_count = |s: &str| {
+        s.split(|ch: char| matches!(ch, '。' | '.' | '！' | '!' | '？' | '?' | ';' | '；' | '\n'))
+            .map(str::trim)
+            .filter(|seg| !seg.is_empty())
             .count()
     };
-    let sentence_count = |s: &str| {
-        s.split(|ch: char| {
-            matches!(
-                ch,
-                '。' | '.' | '！' | '!' | '？' | '?' | ';' | '；' | '\n'
-            )
-        })
-        .map(str::trim)
-        .filter(|seg| !seg.is_empty())
-        .count()
-    };
 
-    let src = informative_count(source_text);
-    let out = informative_count(output);
+    let src = informative_char_count(source_text);
+    let out = informative_char_count(output);
     let allows_aggressive = template_allows_aggressive_compression(prompt_template);
 
     if src >= 24 && out <= 3 {
@@ -1133,6 +1221,148 @@ fn is_suspiciously_short_relative_to_source(
         let out_sent = sentence_count(output);
         if src_sent >= 3 && out_sent <= 1 && src >= 80 && out * 100 < src * 70 {
             return true;
+        }
+    }
+
+    false
+}
+
+fn canonical_noise_char(ch: char) -> char {
+    if ch.is_ascii() {
+        ch.to_ascii_lowercase()
+    } else {
+        ch
+    }
+}
+
+fn is_degenerate_noise_output(output: &str, source_text: &str) -> bool {
+    let text = output.trim();
+    let source_info = informative_char_count(source_text);
+    if text.is_empty() || source_info < 8 {
+        return false;
+    }
+
+    let informative: Vec<char> = text
+        .chars()
+        .filter(|ch| is_informative_char(*ch))
+        .map(canonical_noise_char)
+        .collect();
+    let out_info = informative.len();
+    if out_info == 0 {
+        return true;
+    }
+
+    let unique: HashSet<char> = informative.iter().copied().collect();
+    if out_info <= 4 && unique.len() <= 2 {
+        return true;
+    }
+    if out_info >= 2 && unique.len() == 1 && source_info > out_info {
+        return true;
+    }
+
+    let non_noise_chars = text
+        .chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !matches!(
+                    ch,
+                    '.' | ','
+                        | '，'
+                        | '。'
+                        | '!'
+                        | '！'
+                        | '?'
+                        | '？'
+                        | ';'
+                        | '；'
+                        | ':'
+                        | '：'
+                        | '-'
+                        | '_'
+                        | '~'
+                        | '…'
+                )
+        })
+        .count();
+    non_noise_chars == 0
+}
+
+fn source_looks_like_raw_asr(text: &str) -> bool {
+    let compact = text.trim();
+    if compact.is_empty() {
+        return false;
+    }
+
+    let raw_markers = [
+        "嗯",
+        "啊",
+        "呃",
+        "额",
+        "这个吧",
+        "那个吧",
+        "怎么说呢",
+        "我也不知道怎么说",
+        "懂我意思",
+        "对吧",
+        "然后然后",
+        "就是就是",
+        "问号",
+        "逗号",
+        "句号",
+        "换行",
+    ];
+    if raw_markers.iter().any(|marker| compact.contains(marker)) {
+        return true;
+    }
+
+    let informative = informative_char_count(compact);
+    let has_sentence_punctuation = compact
+        .chars()
+        .any(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?' | '\n'));
+    informative >= 32 && !has_sentence_punctuation
+}
+
+fn is_unchanged_raw_asr_output(output: &str, source_text: &str, prompt_template: &str) -> bool {
+    if template_allows_aggressive_compression(prompt_template) {
+        return false;
+    }
+    normalize_post_process_text(output, false) == normalize_post_process_text(source_text, false)
+        && source_looks_like_raw_asr(source_text)
+}
+
+fn contains_unanchored_history_fragment(
+    output: &str,
+    source_text: &str,
+    history_entries: &[String],
+) -> bool {
+    if history_entries.is_empty() {
+        return false;
+    }
+
+    let output_norm = normalized_informative_text(output);
+    let source_norm = normalized_informative_text(source_text);
+    let source_info = source_norm.chars().count();
+    let min_fragment_chars = if source_info < 24 { 8 } else { 12 };
+
+    if output_norm.chars().count() < min_fragment_chars {
+        return false;
+    }
+
+    for entry in history_entries {
+        let history_norm = normalized_informative_text(entry);
+        let history_chars: Vec<char> = history_norm.chars().collect();
+        if history_chars.len() < min_fragment_chars {
+            continue;
+        }
+
+        for window in history_chars.windows(min_fragment_chars) {
+            let fragment: String = window.iter().collect();
+            if source_norm.contains(&fragment) {
+                continue;
+            }
+            if output_norm.contains(&fragment) {
+                return true;
+            }
         }
     }
 
@@ -1189,8 +1419,35 @@ fn reject_post_output_reason_with_source(
     if let Some(reason) = reject_post_output_reason(output, prompt_template) {
         return Some(reason);
     }
-    if is_suspiciously_short_relative_to_source(output, source_text, prompt_template) {
+    let source_for_validation = normalize_source_for_contract(
+        source_text,
+        template_requests_arabic_digits(prompt_template),
+    );
+    if is_degenerate_noise_output(output, &source_for_validation) {
+        return Some("degenerate_noise_output");
+    }
+    if is_suspiciously_short_relative_to_source(output, &source_for_validation, prompt_template) {
         return Some("too_short_relative_to_source");
+    }
+    if is_unchanged_raw_asr_output(output, source_text, prompt_template) {
+        return Some("unchanged_raw_asr_output");
+    }
+    None
+}
+
+fn reject_post_output_reason_with_history(
+    output: &str,
+    prompt_template: &str,
+    source_text: &str,
+    history_entries: &[String],
+) -> Option<&'static str> {
+    if let Some(reason) =
+        reject_post_output_reason_with_source(output, prompt_template, source_text)
+    {
+        return Some(reason);
+    }
+    if contains_unanchored_history_fragment(output, source_text, history_entries) {
+        return Some("history_context_leakage");
     }
     None
 }
@@ -1204,9 +1461,22 @@ struct LocalGenerationParams {
     repetition_context_size: usize,
 }
 
+const POST_PROCESS_HISTORY_CONTEXT_LIMIT: usize = 3;
+const POST_PROCESS_HISTORY_CONTEXT_MAX_CHARS: usize = 420;
+const POST_PROCESS_HISTORY_CONTEXT_ENTRY_MAX_CHARS: usize = 160;
+const POST_PROCESS_HISTORY_CONTEXT_MIN_SOURCE_CHARS: usize = 48;
+const POST_PROCESS_CONTEXT_HINT_LIMIT: usize = 12;
+const POST_PROCESS_CONTEXT_HINT_MAX_CHARS: usize = 48;
+
+#[derive(Clone, Debug)]
+struct PostProcessHistoryContext {
+    prompt_block: String,
+    entries: Vec<String>,
+}
+
 fn local_generation_params_from_settings(settings: &AppSettings) -> LocalGenerationParams {
     LocalGenerationParams {
-        max_tokens: settings.post_process_local_max_tokens.clamp(64, 512),
+        max_tokens: settings.post_process_local_max_tokens.clamp(64, 2048),
         temperature: settings.post_process_local_temperature.clamp(0.0, 1.0) as f32,
         top_p: settings.post_process_local_top_p.clamp(0.1, 1.0) as f32,
         repetition_penalty: settings
@@ -1215,6 +1485,320 @@ fn local_generation_params_from_settings(settings: &AppSettings) -> LocalGenerat
         repetition_context_size: settings
             .post_process_local_repetition_context_size
             .clamp(32, 256),
+    }
+}
+
+fn source_aware_local_generation_params(
+    settings: &AppSettings,
+    source_text: &str,
+    prompt_template: &str,
+) -> LocalGenerationParams {
+    let mut params = local_generation_params_from_settings(settings);
+    if !template_allows_aggressive_compression(prompt_template) {
+        let source_info = informative_char_count(source_text);
+        if source_info >= 800 {
+            params.max_tokens = params.max_tokens.max((source_info + 384).min(2048));
+        } else if source_info >= 320 {
+            params.max_tokens = params.max_tokens.max((source_info + 320).min(1536));
+        } else if source_info >= 160 {
+            params.max_tokens = params.max_tokens.max(960);
+        } else if source_info >= 80 {
+            params.max_tokens = params.max_tokens.max(640);
+        } else if source_info >= 40 {
+            params.max_tokens = params.max_tokens.max(448);
+        }
+    }
+    params
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= max_chars {
+            out.push_str("...");
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn best_history_context_text(entry: &crate::managers::history::HistoryEntry) -> &str {
+    entry
+        .post_processed_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| entry.transcription_text.trim())
+}
+
+fn should_include_post_process_history_context(source_text: &str) -> bool {
+    informative_char_count(source_text) >= POST_PROCESS_HISTORY_CONTEXT_MIN_SOURCE_CHARS
+}
+
+fn is_context_hint_term_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '+' | '#')
+}
+
+fn should_keep_context_hint(term: &str) -> bool {
+    let trimmed = term.trim().trim_matches(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                ',' | '.' | ';' | ':' | '!' | '?' | '，' | '。' | '；' | '：' | '！' | '？' | '、'
+            )
+    });
+    if trimmed.chars().count() < 2 || trimmed.chars().count() > POST_PROCESS_CONTEXT_HINT_MAX_CHARS
+    {
+        return false;
+    }
+
+    let has_ascii_letter = trimmed.chars().any(|ch| ch.is_ascii_alphabetic());
+    let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
+    let has_symbol = trimmed
+        .chars()
+        .any(|ch| matches!(ch, '-' | '_' | '.' | '/' | '+' | '#'));
+    let has_uppercase = trimmed.chars().any(|ch| ch.is_ascii_uppercase());
+
+    (has_ascii_letter && (has_digit || has_symbol || has_uppercase || trimmed.chars().count() >= 4))
+        || (has_digit && has_symbol)
+}
+
+fn push_context_hint(hints: &mut Vec<String>, seen: &mut HashSet<String>, raw: &str) {
+    let hint = raw
+        .trim()
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ',' | '.'
+                        | ';'
+                        | ':'
+                        | '!'
+                        | '?'
+                        | '，'
+                        | '。'
+                        | '；'
+                        | '：'
+                        | '！'
+                        | '？'
+                        | '、'
+                )
+        })
+        .to_string();
+    if !should_keep_context_hint(&hint) {
+        return;
+    }
+    let key = normalized_informative_text(&hint);
+    if seen.insert(key) {
+        hints.push(hint);
+    }
+}
+
+fn extract_context_hints_from_text(
+    text: &str,
+    hints: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let mut current = String::new();
+    for ch in text.chars() {
+        if is_context_hint_term_char(ch) {
+            current.push(ch);
+        } else if !current.is_empty() {
+            push_context_hint(hints, seen, &current);
+            current.clear();
+        }
+        if hints.len() >= POST_PROCESS_CONTEXT_HINT_LIMIT {
+            return;
+        }
+    }
+    if !current.is_empty() && hints.len() < POST_PROCESS_CONTEXT_HINT_LIMIT {
+        push_context_hint(hints, seen, &current);
+    }
+}
+
+fn extract_quoted_context_hints(text: &str, hints: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let quote_pairs = [('“', '”'), ('"', '"'), ('`', '`'), ('「', '」')];
+    for (open, close) in quote_pairs {
+        let mut in_quote = false;
+        let mut current = String::new();
+        for ch in text.chars() {
+            if in_quote {
+                if ch == close {
+                    push_context_hint(hints, seen, &current);
+                    current.clear();
+                    in_quote = false;
+                    if hints.len() >= POST_PROCESS_CONTEXT_HINT_LIMIT {
+                        return;
+                    }
+                } else {
+                    current.push(ch);
+                }
+            } else if ch == open {
+                in_quote = true;
+            }
+        }
+    }
+}
+
+fn build_context_hint_block(history_texts: &[String]) -> Option<String> {
+    let mut hints = Vec::new();
+    let mut seen = HashSet::new();
+
+    for text in history_texts {
+        extract_context_hints_from_text(text, &mut hints, &mut seen);
+        extract_quoted_context_hints(text, &mut hints, &mut seen);
+        if hints.len() >= POST_PROCESS_CONTEXT_HINT_LIMIT {
+            break;
+        }
+    }
+
+    if hints.is_empty() {
+        return None;
+    }
+
+    let lines = hints
+        .iter()
+        .take(POST_PROCESS_CONTEXT_HINT_LIMIT)
+        .map(|hint| format!("- {}", hint))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "OPTIONAL_CONTEXT_HINTS\n说明：以下不是历史正文，只是从历史记录中提取的可能术语/名称候选。只有当前转录中已经出现对应读音、近似写法或明显误识别时，才可用于修正写法；不得输出未在当前转录中出现的候选，不得补充任何历史事实、句子或观点。\n{}\nEND_OPTIONAL_CONTEXT_HINTS",
+        lines
+    ))
+}
+
+fn build_post_process_history_context(
+    app: &AppHandle,
+    source_text: &str,
+) -> Option<PostProcessHistoryContext> {
+    if !should_include_post_process_history_context(source_text) {
+        debug!(
+            "Post-process history context skipped because source is too short or weakly anchored"
+        );
+        return None;
+    }
+
+    let history_manager = app.state::<Arc<HistoryManager>>();
+    let entries =
+        match history_manager.get_recent_completed_entries(POST_PROCESS_HISTORY_CONTEXT_LIMIT) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warn!("Failed to load post-process history context: {}", err);
+                return None;
+            }
+        };
+
+    let mut context_entries = Vec::new();
+    let mut used_chars = 0usize;
+
+    for entry in entries {
+        let text = best_history_context_text(&entry);
+        if text.is_empty() {
+            continue;
+        }
+
+        let remaining = POST_PROCESS_HISTORY_CONTEXT_MAX_CHARS.saturating_sub(used_chars);
+        if remaining == 0 {
+            break;
+        }
+
+        let entry_limit = POST_PROCESS_HISTORY_CONTEXT_ENTRY_MAX_CHARS.min(remaining);
+        let trimmed = truncate_chars(text, entry_limit);
+        used_chars += trimmed.chars().count();
+        context_entries.push(trimmed.clone());
+    }
+
+    if context_entries.is_empty() {
+        return None;
+    }
+    let prompt_block = build_context_hint_block(&context_entries);
+
+    Some(PostProcessHistoryContext {
+        prompt_block: prompt_block.unwrap_or_default(),
+        entries: context_entries,
+    })
+}
+
+fn build_user_prompt_content_with_history_context(
+    prompt_template: &str,
+    transcription: &str,
+    history_context: Option<&str>,
+) -> String {
+    let content = build_user_prompt_content(prompt_template, transcription);
+    match history_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(context) => format!("{}\n\n{}", content, context),
+        None => content,
+    }
+}
+
+fn build_retry_user_prompt_content(
+    prompt_template: &str,
+    transcription: &str,
+    previous_reject_reason: &str,
+) -> String {
+    let mut content = build_user_prompt_content(prompt_template, transcription);
+    content.push_str("\n\nRETRY_CONSTRAINT:\n");
+    content.push_str("Previous output was rejected because ");
+    content.push_str(previous_reject_reason);
+    content.push_str(". Reprocess only CURRENT_TRANSCRIPT / <transcript_data>. Do not use or infer from history. If the current transcript is short, keep the output short and only normalize words that are present in the current transcript.");
+    content
+}
+
+fn normalize_and_validate_post_process_output(
+    raw_output: &str,
+    source_text: &str,
+    prompt_template: &str,
+    force_arabic_digits: bool,
+    history_entries: &[String],
+) -> Result<String, &'static str> {
+    let normalized =
+        normalize_post_process_candidate(raw_output, prompt_template, force_arabic_digits);
+    let final_text = apply_source_aware_contract_fallback(
+        &normalized,
+        source_text,
+        prompt_template,
+        force_arabic_digits,
+    );
+    match reject_post_output_reason_with_history(
+        &final_text,
+        prompt_template,
+        source_text,
+        history_entries,
+    ) {
+        Some(reason) => Err(reason),
+        None => Ok(final_text),
+    }
+}
+
+fn should_retry_post_process_without_history(reason: &str) -> bool {
+    matches!(
+        reason,
+        "history_context_leakage" | "unchanged_raw_asr_output" | "too_short_relative_to_source"
+    )
+}
+
+fn extract_structured_post_process_text(content: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(json) => json
+            .get(TRANSCRIPTION_FIELD)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                warn!("Structured output response missing 'transcription' field");
+                content.to_string()
+            }),
+        Err(err) => {
+            warn!(
+                "Failed to parse structured output JSON: {}. Validating raw content.",
+                err
+            );
+            content.to_string()
+        }
     }
 }
 
@@ -1281,9 +1865,18 @@ async fn post_process_transcription(
     }
 
     let system_prompt = settings.post_process_system_prompt.trim().to_string();
-    let quality_params = local_generation_params_from_settings(settings);
     let force_arabic_digits = template_requests_arabic_digits(&prompt);
     let prompt_template_for_post = prompt.clone();
+    let quality_params =
+        source_aware_local_generation_params(settings, &transcription_text, &prompt);
+    let history_context = build_post_process_history_context(app, &transcription_text);
+    let history_prompt_block = history_context
+        .as_ref()
+        .map(|context| context.prompt_block.as_str());
+    let history_entries = history_context
+        .as_ref()
+        .map(|context| context.entries.clone())
+        .unwrap_or_default();
     debug!(
         "Post-process request prepared: provider='{}', model='{}', source_len={}, prompt_id='{}'",
         provider.id,
@@ -1296,13 +1889,18 @@ async fn post_process_transcription(
         let manager = app.state::<Arc<Qwen35PostManager>>().inner().clone();
         let local_model = model.clone();
         let local_text = transcription_text.clone();
-        let local_user_content = build_user_prompt_content(&prompt, &local_text);
+        let local_user_content = build_user_prompt_content_with_history_context(
+            &prompt,
+            &local_text,
+            history_prompt_block,
+        );
         let local_user_content_for_infer = local_user_content.clone();
         let local_template_id = selected_prompt_id.clone();
         let local_quality = quality_params;
         let local_system_prompt = system_prompt.clone();
         let local_force_arabic_digits = force_arabic_digits;
         let local_prompt_template = prompt_template_for_post.clone();
+        let local_history_entries = history_entries.clone();
         return match tauri::async_runtime::spawn_blocking(move || {
             debug!(
                 "Local Qwen3.5 params => max_tokens={}, temperature={}, top_p={}, repetition_penalty={}, repetition_context_size={}",
@@ -1343,31 +1941,31 @@ async fn post_process_transcription(
                 preview_for_log(&first_final, 120)
             );
 
-            if reject_post_output_reason_with_source(
+            let first_reject_reason = reject_post_output_reason_with_history(
                 &first_final,
                 &local_prompt_template,
                 &local_text,
-            )
-            .is_none()
-            {
+                &local_history_entries,
+            );
+            if first_reject_reason.is_none() {
                 return Ok(first_final);
             }
-            if let Some(reason) = reject_post_output_reason_with_source(
-                &first_final,
-                &local_prompt_template,
-                &local_text,
-            ) {
+            if let Some(reason) = first_reject_reason {
                 warn!(
                     "Local Qwen3.5 first pass rejected (reason={}, template_id={})",
                     reason, local_template_id
                 );
             }
 
-            // Retry once when first pass leaks template/instructions.
-            // This especially helps immediately after model switch/cold load.
+            let retry_reason = first_reject_reason.unwrap_or("unknown");
+            let second_user_content =
+                build_retry_user_prompt_content(&local_prompt_template, &local_text, retry_reason);
+
+            // Retry once without history when the first pass leaks history,
+            // returns raw ASR unchanged, or otherwise violates the output contract.
             let second = manager.process_text(
                 &local_model,
-                &local_user_content_for_infer,
+                &second_user_content,
                 &local_system_prompt,
                 Some(local_template_id.as_str()),
                 local_quality.max_tokens,
@@ -1394,20 +1992,17 @@ async fn post_process_transcription(
                 second_final.len(),
                 preview_for_log(&second_final, 120)
             );
-            if reject_post_output_reason_with_source(
+            let empty_history_entries: Vec<String> = Vec::new();
+            let second_reject_reason = reject_post_output_reason_with_history(
                 &second_final,
                 &local_prompt_template,
                 &local_text,
-            )
-            .is_none()
-            {
+                &empty_history_entries,
+            );
+            if second_reject_reason.is_none() {
                 return Ok(second_final);
             }
-            if let Some(reason) = reject_post_output_reason_with_source(
-                &second_final,
-                &local_prompt_template,
-                &local_text,
-            ) {
+            if let Some(reason) = second_reject_reason {
                 warn!(
                     "Local Qwen3.5 second pass rejected (reason={}, template_id={})",
                     reason, local_template_id
@@ -1478,7 +2073,11 @@ async fn post_process_transcription(
     if provider.supports_structured_output {
         debug!("Using structured outputs for provider '{}'", provider.id);
 
-        let user_content = build_user_prompt_content(&prompt, &transcription_text);
+        let user_content = build_user_prompt_content_with_history_context(
+            &prompt,
+            &transcription_text,
+            history_prompt_block,
+        );
 
         // Handle Apple Intelligence separately since it uses native Swift APIs
         if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
@@ -1502,22 +2101,70 @@ async fn post_process_transcription(
                             debug!("Apple Intelligence returned an empty response");
                             None
                         } else {
-                            let result = normalize_post_process_candidate(
-                                &result,
-                                &prompt_template_for_post,
-                                force_arabic_digits,
-                            );
-                            let result = apply_source_aware_contract_fallback(
+                            match normalize_and_validate_post_process_output(
                                 &result,
                                 &transcription_text,
                                 &prompt_template_for_post,
                                 force_arabic_digits,
-                            );
-                            debug!(
-                                "Apple Intelligence post-processing succeeded. Output length: {} chars",
-                                result.len()
-                            );
-                            Some(result)
+                                &history_entries,
+                            ) {
+                                Ok(result) => {
+                                    debug!(
+                                        "Apple Intelligence post-processing succeeded. Output length: {} chars",
+                                        result.len()
+                                    );
+                                    Some(result)
+                                }
+                                Err(reason)
+                                    if should_retry_post_process_without_history(reason) =>
+                                {
+                                    warn!(
+                                        "Apple Intelligence post-processing output rejected (reason={}); retrying without history",
+                                        reason
+                                    );
+                                    let retry_user_content = build_retry_user_prompt_content(
+                                        &prompt_template_for_post,
+                                        &transcription_text,
+                                        reason,
+                                    );
+                                    match apple_intelligence::process_text_with_system_prompt(
+                                        &system_prompt,
+                                        &retry_user_content,
+                                        token_limit,
+                                    ) {
+                                        Ok(retry_result) => {
+                                            let empty_history_entries: Vec<String> = Vec::new();
+                                            match normalize_and_validate_post_process_output(
+                                                &retry_result,
+                                                &transcription_text,
+                                                &prompt_template_for_post,
+                                                force_arabic_digits,
+                                                &empty_history_entries,
+                                            ) {
+                                                Ok(result) => Some(result),
+                                                Err(retry_reason) => {
+                                                    warn!(
+                                                        "Apple Intelligence retry output rejected (reason={})",
+                                                        retry_reason
+                                                    );
+                                                    None
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!("Apple Intelligence retry failed: {}", err);
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(reason) => {
+                                    warn!(
+                                        "Apple Intelligence post-processing output rejected by validators (reason={})",
+                                        reason
+                                    );
+                                    None
+                                }
+                            }
                         }
                     }
                     Err(err) => {
@@ -1553,100 +2200,84 @@ async fn post_process_transcription(
             &model,
             user_content.clone(),
             Some(system_prompt.clone()),
-            Some(json_schema),
+            Some(json_schema.clone()),
         )
         .await
         {
             Ok(Some(content)) => {
-                // Parse the JSON response to extract the transcription field
-                match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(json) => {
-                        if let Some(transcription_value) =
-                            json.get(TRANSCRIPTION_FIELD).and_then(|t| t.as_str())
+                let candidate = extract_structured_post_process_text(&content);
+                match normalize_and_validate_post_process_output(
+                    &candidate,
+                    &transcription_text,
+                    &prompt_template_for_post,
+                    force_arabic_digits,
+                    &history_entries,
+                ) {
+                    Ok(result) => {
+                        debug!(
+                            "Structured output post-processing succeeded for provider '{}'. Output length: {} chars",
+                            provider.id,
+                            result.len()
+                        );
+                        return Some(result);
+                    }
+                    Err(reason) if should_retry_post_process_without_history(reason) => {
+                        warn!(
+                            "Structured post-processing output rejected (reason={}); retrying without history",
+                            reason
+                        );
+                        let retry_user_content = build_retry_user_prompt_content(
+                            &prompt_template_for_post,
+                            &transcription_text,
+                            reason,
+                        );
+                        match crate::llm_client::send_chat_completion_with_schema(
+                            &provider,
+                            api_key.clone(),
+                            &model,
+                            retry_user_content,
+                            Some(system_prompt.clone()),
+                            Some(json_schema.clone()),
+                        )
+                        .await
                         {
-                            let result = normalize_post_process_candidate(
-                                transcription_value,
-                                &prompt_template_for_post,
-                                force_arabic_digits,
-                            );
-                            let result = apply_source_aware_contract_fallback(
-                                &result,
-                                &transcription_text,
-                                &prompt_template_for_post,
-                                force_arabic_digits,
-                            );
-                            if let Some(reason) = reject_post_output_reason_with_source(
-                                &result,
-                                &prompt_template_for_post,
-                                &transcription_text,
-                            ) {
-                                warn!(
-                                    "Structured post-processing output rejected by validators (reason={})",
-                                    reason
-                                );
+                            Ok(Some(retry_content)) => {
+                                let retry_candidate =
+                                    extract_structured_post_process_text(&retry_content);
+                                let empty_history_entries: Vec<String> = Vec::new();
+                                match normalize_and_validate_post_process_output(
+                                    &retry_candidate,
+                                    &transcription_text,
+                                    &prompt_template_for_post,
+                                    force_arabic_digits,
+                                    &empty_history_entries,
+                                ) {
+                                    Ok(result) => return Some(result),
+                                    Err(retry_reason) => {
+                                        warn!(
+                                            "Structured post-processing retry rejected (reason={})",
+                                            retry_reason
+                                        );
+                                        return None;
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                error!("Structured retry API response has no content");
                                 return None;
                             }
-                            debug!(
-                                "Structured output post-processing succeeded for provider '{}'. Output length: {} chars",
-                                provider.id,
-                                result.len()
-                            );
-                            return Some(result);
-                        } else {
-                            error!("Structured output response missing 'transcription' field");
-                            let cleaned = normalize_post_process_candidate(
-                                &content,
-                                &prompt_template_for_post,
-                                force_arabic_digits,
-                            );
-                            let cleaned = apply_source_aware_contract_fallback(
-                                &cleaned,
-                                &transcription_text,
-                                &prompt_template_for_post,
-                                force_arabic_digits,
-                            );
-                            if let Some(reason) = reject_post_output_reason_with_source(
-                                &cleaned,
-                                &prompt_template_for_post,
-                                &transcription_text,
-                            ) {
-                                warn!(
-                                    "Structured raw content rejected by validators (reason={})",
-                                    reason
-                                );
+                            Err(err) => {
+                                warn!("Structured retry failed: {}", err);
                                 return None;
                             }
-                            return Some(cleaned);
                         }
                     }
-                    Err(e) => {
-                        error!(
-                            "Failed to parse structured output JSON: {}. Returning raw content.",
-                            e
+                    Err(reason) => {
+                        warn!(
+                            "Structured post-processing output rejected by validators (reason={})",
+                            reason
                         );
-                        let cleaned = normalize_post_process_candidate(
-                            &content,
-                            &prompt_template_for_post,
-                            force_arabic_digits,
-                        );
-                        let cleaned = apply_source_aware_contract_fallback(
-                            &cleaned,
-                            &transcription_text,
-                            &prompt_template_for_post,
-                            force_arabic_digits,
-                        );
-                        if let Some(reason) = reject_post_output_reason_with_source(
-                            &cleaned,
-                            &prompt_template_for_post,
-                            &transcription_text,
-                        ) {
-                            warn!(
-                                "Structured fallback content rejected by validators (reason={})",
-                                reason
-                            );
-                            return None;
-                        }
-                        return Some(cleaned);
+                        return None;
                     }
                 }
             }
@@ -1665,12 +2296,16 @@ async fn post_process_transcription(
     }
 
     // Legacy mode: Build user content from prompt template.
-    let processed_prompt = build_user_prompt_content(&prompt, &transcription_text);
+    let processed_prompt = build_user_prompt_content_with_history_context(
+        &prompt,
+        &transcription_text,
+        history_prompt_block,
+    );
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
     match crate::llm_client::send_chat_completion_with_schema(
         &provider,
-        api_key,
+        api_key.clone(),
         &model,
         processed_prompt.clone(),
         Some(system_prompt.clone()),
@@ -1679,34 +2314,78 @@ async fn post_process_transcription(
     .await
     {
         Ok(Some(content)) => {
-            let content = normalize_post_process_candidate(
-                &content,
-                &prompt_template_for_post,
-                force_arabic_digits,
-            );
-            let content = apply_source_aware_contract_fallback(
+            match normalize_and_validate_post_process_output(
                 &content,
                 &transcription_text,
                 &prompt_template_for_post,
                 force_arabic_digits,
-            );
-            if let Some(reason) = reject_post_output_reason_with_source(
-                &content,
-                &prompt_template_for_post,
-                &transcription_text,
+                &history_entries,
             ) {
-                warn!(
-                    "Legacy post-processing output rejected by validators (reason={})",
-                    reason
-                );
-                return None;
+                Ok(content) => {
+                    debug!(
+                        "LLM post-processing succeeded for provider '{}'. Output length: {} chars",
+                        provider.id,
+                        content.len()
+                    );
+                    Some(content)
+                }
+                Err(reason) if should_retry_post_process_without_history(reason) => {
+                    warn!(
+                        "Legacy post-processing output rejected (reason={}); retrying without history",
+                        reason
+                    );
+                    let retry_prompt = build_retry_user_prompt_content(
+                        &prompt_template_for_post,
+                        &transcription_text,
+                        reason,
+                    );
+                    match crate::llm_client::send_chat_completion_with_schema(
+                        &provider,
+                        api_key,
+                        &model,
+                        retry_prompt,
+                        Some(system_prompt.clone()),
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(Some(retry_content)) => {
+                            let empty_history_entries: Vec<String> = Vec::new();
+                            match normalize_and_validate_post_process_output(
+                                &retry_content,
+                                &transcription_text,
+                                &prompt_template_for_post,
+                                force_arabic_digits,
+                                &empty_history_entries,
+                            ) {
+                                Ok(content) => Some(content),
+                                Err(retry_reason) => {
+                                    warn!(
+                                        "Legacy post-processing retry rejected (reason={})",
+                                        retry_reason
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            error!("Legacy retry API response has no content");
+                            None
+                        }
+                        Err(err) => {
+                            error!("Legacy retry failed: {}", err);
+                            None
+                        }
+                    }
+                }
+                Err(reason) => {
+                    warn!(
+                        "Legacy post-processing output rejected by validators (reason={})",
+                        reason
+                    );
+                    None
+                }
             }
-            debug!(
-                "LLM post-processing succeeded for provider '{}'. Output length: {} chars",
-                provider.id,
-                content.len()
-            );
-            Some(content)
         }
         Ok(None) => {
             error!("LLM API response has no content");
@@ -1810,7 +2489,7 @@ pub(crate) async fn process_transcription_output(
                 }
             }
 
-            let scripted_text = maybe_apply_script_hook(
+            let script_candidate = maybe_apply_script_hook(
                 &settings,
                 ScriptHookStage::LlmPost,
                 settings.post_llm_script_path.as_deref(),
@@ -1830,6 +2509,20 @@ pub(crate) async fn process_transcription_output(
                     })),
                 },
             );
+            let prompt_for_validation = post_process_prompt.as_deref().unwrap_or_default();
+            let scripted_text = if let Some(reason) = reject_post_output_reason_with_source(
+                &script_candidate,
+                prompt_for_validation,
+                &source_before_post,
+            ) {
+                warn!(
+                    "LLM post script output rejected (reason={}); keeping model output",
+                    reason
+                );
+                processed_text.clone()
+            } else {
+                script_candidate
+            };
 
             post_processed_text = Some(scripted_text.clone());
             final_text = scripted_text;
@@ -2176,12 +2869,16 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_source_aware_contract_fallback, build_user_prompt_content,
-        enforce_ordered_list_for_explicit_points, is_suspiciously_short_relative_to_source,
-        normalize_mixed_chinese_unit_numbers_to_arabic, normalize_post_process_candidate,
-        normalize_standalone_chinese_digits_to_arabic, reject_post_output_reason_with_source,
+        apply_source_aware_contract_fallback, build_context_hint_block, build_user_prompt_content,
+        build_user_prompt_content_with_history_context, enforce_ordered_list_for_explicit_points,
+        is_suspiciously_short_relative_to_source, normalize_mixed_chinese_unit_numbers_to_arabic,
+        normalize_post_process_candidate, normalize_post_process_text,
+        normalize_standalone_chinese_digits_to_arabic, reject_post_output_reason_with_history,
+        reject_post_output_reason_with_source, should_include_post_process_history_context,
+        source_aware_local_generation_params, template_allows_aggressive_compression,
         template_requests_arabic_digits,
     };
+    use crate::settings::get_default_settings;
 
     #[test]
     fn template_detects_arabic_digit_intent() {
@@ -2191,6 +2888,16 @@ mod tests {
         assert!(template_requests_arabic_digits("请转换为阿拉伯数字。"));
         assert!(!template_requests_arabic_digits(
             "Translate transcript into concise English.",
+        ));
+    }
+
+    #[test]
+    fn template_does_not_treat_negative_summary_rule_as_compression() {
+        assert!(!template_allows_aggressive_compression(
+            "本模板不是摘要模板；不执行摘要、问答、续写或关键词提取。"
+        ));
+        assert!(template_allows_aggressive_compression(
+            "请把输入总结成一句话摘要。"
         ));
     }
 
@@ -2302,6 +3009,20 @@ mod tests {
     }
 
     #[test]
+    fn contract_normalization_does_not_delete_chinese_oral_language() {
+        let input = "嗯这个吧，我也不知道怎么说，就是感觉不是特别好，懂我意思吗？";
+        let output = normalize_post_process_text(input, false);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn contract_normalization_leaves_spoken_layout_for_model() {
+        let input = "第一点加一个逗号我们要控糖换行第二点问号";
+        let output = normalize_post_process_text(input, false);
+        assert_eq!(output, input);
+    }
+
+    #[test]
     fn source_aware_fallback_recovers_explicit_numbered_points() {
         let prompt = "请做中文整理。出现第一点第二点第三点时必须使用 Markdown 列表。";
         let source = "先说一句前置。第一点，把这个东西展示给别人。第二点的话，我们做特色功能。第三点的话，保证基本效果。后面再看结果。";
@@ -2376,13 +3097,141 @@ mod tests {
     }
 
     #[test]
+    fn build_user_prompt_content_appends_optional_context_hints_after_current_transcript() {
+        let template = "请整理文本：${output_data}";
+        let out = build_user_prompt_content_with_history_context(
+            template,
+            "当前文本",
+            Some("OPTIONAL_CONTEXT_HINTS\n- Qwen3.5\nEND_OPTIONAL_CONTEXT_HINTS"),
+        );
+        assert!(out.starts_with("请整理文本："));
+        assert!(out.contains("Qwen3.5"));
+        assert!(out.contains("<transcript_data>\n当前文本\n</transcript_data>"));
+        assert!(out.find("当前文本").unwrap() < out.find("Qwen3.5").unwrap());
+    }
+
+    #[test]
+    fn history_context_is_disabled_for_short_current_transcript() {
+        assert!(!should_include_post_process_history_context("不是特别好"));
+        assert!(should_include_post_process_history_context(
+            "我们当前需要测试后处理是否会错误引入历史记录，所以这段当前转录必须足够长，用来作为判断锚点，同时还要包含明确的当前主题和多个细节。"
+        ));
+    }
+
+    #[test]
+    fn history_context_prompt_contains_only_term_hints_not_history_body() {
+        let history_texts = vec![
+            "上次我们讨论的是自动同步数据库和后台权限配置，这整句不应该进入 prompt。".to_string(),
+            "本项目包含 Handy-Qwen3-ASR-0.6B-1.7B-8bit，也会提到 Qwen3.5 和 ASR。".to_string(),
+        ];
+        let block = build_context_hint_block(&history_texts).expect("should extract hints");
+        assert!(block.contains("OPTIONAL_CONTEXT_HINTS"));
+        assert!(block.contains("Handy-Qwen3-ASR-0.6B-1.7B-8bit"));
+        assert!(block.contains("Qwen3.5"));
+        assert!(!block.contains("自动同步数据库和后台权限配置"));
+        assert!(!block.contains("这整句不应该进入 prompt"));
+        assert!(!block.contains("OPTIONAL_HISTORY_CONTEXT"));
+    }
+
+    #[test]
+    fn reject_reason_with_history_detects_history_context_leakage() {
+        let source = "不是特别好";
+        let output = "不是特别好。上次我们讨论的是自动同步数据库和后台权限配置。";
+        let history_entries = vec!["上次我们讨论的是自动同步数据库和后台权限配置。".to_string()];
+        assert_eq!(
+            reject_post_output_reason_with_history(
+                output,
+                "请做中文 ASR 转录规范化，不执行摘要。",
+                source,
+                &history_entries,
+            ),
+            Some("history_context_leakage")
+        );
+    }
+
+    #[test]
+    fn reject_reason_with_history_allows_history_terms_already_in_source() {
+        let source = "我们要测试自动同步数据库这个词是否识别正确";
+        let output = "我们要测试“自动同步数据库”这个词是否识别正确。";
+        let history_entries = vec!["自动同步数据库是之前提到过的术语。".to_string()];
+        assert_eq!(
+            reject_post_output_reason_with_history(
+                output,
+                "请做中文 ASR 转录规范化，不执行摘要。",
+                source,
+                &history_entries,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn reject_reason_with_source_detects_unchanged_raw_asr_output() {
+        let source = "嗯这个吧我也不知道怎么说就是感觉不是特别好懂我意思吗";
+        assert_eq!(
+            reject_post_output_reason_with_source(
+                source,
+                "请做中文 ASR 转录规范化，不执行摘要。",
+                source,
+            ),
+            Some("unchanged_raw_asr_output")
+        );
+    }
+
+    #[test]
+    fn local_generation_params_raise_token_floor_for_long_fidelity_prompt() {
+        let mut settings = get_default_settings();
+        settings.post_process_local_max_tokens = 128;
+        let source = "这是一段比较长的转录内容，我们需要保留事实、条件、结论和多个动作，不能因为默认 token 太低而截断。".repeat(16);
+        let params = source_aware_local_generation_params(
+            &settings,
+            &source,
+            "请做中文转录润色，不要总结，不要过度精简。",
+        );
+        assert!(params.max_tokens >= 960);
+    }
+
+    #[test]
+    fn source_aware_fallback_preserves_meaningful_short_input() {
+        let prompt = "请做中文转录保真修复，不要总结，不要过度精简。";
+        let source = "测试一下后处理";
+        let out = apply_source_aware_contract_fallback("", source, prompt, false);
+        assert_eq!(out, source);
+    }
+
+    #[test]
+    fn source_aware_fallback_returns_source_without_oral_cleanup_when_model_is_empty() {
+        let prompt = "请做中文 ASR 转录规范化，不执行摘要。";
+        let source = "嗯这个吧，我也不知道怎么说，就是感觉不是特别好，懂我意思吗？";
+        let out = apply_source_aware_contract_fallback("", source, prompt, false);
+        assert_eq!(out, source);
+    }
+
+    #[test]
+    fn source_aware_fallback_rejects_over_trimmed_short_input() {
+        let prompt = "请做中文转录保真修复，不要总结，不要过度精简。";
+        let source = "测试一下后处理";
+        let out = apply_source_aware_contract_fallback("测试", source, prompt, false);
+        assert_eq!(out, source);
+    }
+
+    #[test]
     fn reject_reason_with_source_detects_too_short_result() {
         let source = "我们先说一段完整内容，里面有多个点、数字和条件，不能只剩几个字母。";
         let output = "aa";
         let prompt = "请整理文本并只输出最终结果。";
         assert_eq!(
             reject_post_output_reason_with_source(output, prompt, source),
-            Some("too_short_relative_to_source")
+            Some("degenerate_noise_output")
+        );
+    }
+
+    #[test]
+    fn reject_reason_with_source_detects_degenerate_aaaa_output() {
+        let source = "我们当前需要测试后处理是否保留完整内容，不应该最后只剩下几个无意义字母。";
+        assert_eq!(
+            reject_post_output_reason_with_source("aaaa", "请做中文转录润色。", source),
+            Some("degenerate_noise_output")
         );
     }
 

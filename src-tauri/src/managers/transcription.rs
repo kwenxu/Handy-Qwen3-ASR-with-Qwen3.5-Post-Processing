@@ -45,6 +45,25 @@ enum LoadedEngine {
     Qwen3(Qwen3Engine),
 }
 
+fn contains_cjk_text(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch))
+}
+
+fn language_for_output_filter(validated_language: &str, app_language: &str, text: &str) -> String {
+    match validated_language {
+        "zh" | "zh-Hans" | "zh-Hant" | "yue" => "zh".to_string(),
+        "auto" => {
+            if contains_cjk_text(text) {
+                "zh".to_string()
+            } else {
+                app_language.to_string()
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
 /// RAII guard that clears the `is_loading` flag and notifies waiters on drop.
 /// Ensures the loading flag is always reset, even on early returns or panics.
 pub struct LoadingGuard {
@@ -648,10 +667,16 @@ impl TranscriptionManager {
             result.text
         };
 
-        // Filter out filler words and hallucinations
+        // Filter out filler words and hallucinations using the speech language,
+        // not the UI language. Auto mode falls back to text-script detection.
+        let filter_language = language_for_output_filter(
+            &validated_language,
+            &settings.app_language,
+            &corrected_result,
+        );
         let filtered_result = filter_transcription_output(
             &corrected_result,
-            &settings.app_language,
+            &filter_language,
             &settings.custom_filler_words,
         );
 
@@ -679,6 +704,7 @@ impl TranscriptionManager {
                     "phase": "after_transcription",
                     "input_length": filtered_result.chars().count(),
                     "app_language": settings.app_language,
+                    "filter_language": filter_language,
                 })),
                 ..Default::default()
             },

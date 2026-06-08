@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { Check, Copy, FolderOpen, RotateCcw, Star, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Edit3,
+  FolderOpen,
+  RotateCcw,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -223,6 +231,24 @@ export const HistorySettings: React.FC = () => {
     }
   };
 
+  const updateHistoryEntryText = async (
+    id: number,
+    transcriptionText: string,
+    postProcessedText: string | null,
+  ) => {
+    const result = await commands.updateHistoryEntryText(
+      id,
+      transcriptionText,
+      postProcessedText,
+    );
+    if (result.status !== "ok") {
+      throw new Error(String(result.error));
+    }
+    setEntries((prev) =>
+      prev.map((entry) => (entry.id === id ? result.data : entry)),
+    );
+  };
+
   const openRecordingsFolder = async () => {
     try {
       const result = await commands.openRecordingsFolder();
@@ -261,6 +287,7 @@ export const HistorySettings: React.FC = () => {
               getAudioUrl={getAudioUrl}
               deleteAudio={deleteAudioEntry}
               retryTranscription={retryHistoryEntry}
+              updateText={updateHistoryEntryText}
             />
           ))}
         </div>
@@ -299,6 +326,11 @@ interface HistoryEntryProps {
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
   retryTranscription: (id: number) => Promise<void>;
+  updateText: (
+    id: number,
+    transcriptionText: string,
+    postProcessedText: string | null,
+  ) => Promise<void>;
 }
 
 const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
@@ -308,12 +340,30 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   getAudioUrl,
   deleteAudio,
   retryTranscription,
+  updateText,
 }) => {
   const { t, i18n } = useTranslation();
   const [showCopied, setShowCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [draftTranscription, setDraftTranscription] = useState(
+    entry.transcription_text,
+  );
+  const [draftPostProcessed, setDraftPostProcessed] = useState(
+    entry.post_processed_text ?? "",
+  );
 
   const hasTranscription = entry.transcription_text.trim().length > 0;
+  const hasPostProcessedField =
+    entry.post_process_requested || entry.post_processed_text !== null;
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftTranscription(entry.transcription_text);
+      setDraftPostProcessed(entry.post_processed_text ?? "");
+    }
+  }, [editing, entry.transcription_text, entry.post_processed_text]);
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
@@ -351,6 +401,34 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     }
   };
 
+  const handleSaveEdit = async () => {
+    if (draftTranscription.trim().length === 0) {
+      toast.error(t("settings.history.editEmptyError"));
+      return;
+    }
+
+    try {
+      setSavingEdit(true);
+      await updateText(
+        entry.id,
+        draftTranscription,
+        hasPostProcessedField ? draftPostProcessed : entry.post_processed_text,
+      );
+      setEditing(false);
+    } catch (error) {
+      console.error("Failed to edit history entry:", error);
+      toast.error(t("settings.history.editError"));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setDraftTranscription(entry.transcription_text);
+    setDraftPostProcessed(entry.post_processed_text ?? "");
+    setEditing(false);
+  };
+
   const formattedDate = formatDateTime(String(entry.timestamp), i18n.language);
 
   return (
@@ -359,8 +437,15 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         <p className="text-sm font-medium">{formattedDate}</p>
         <div className="flex items-center">
           <IconButton
+            onClick={() => setEditing(true)}
+            disabled={retrying || savingEdit || editing}
+            title={t("common.edit")}
+          >
+            <Edit3 width={16} height={16} />
+          </IconButton>
+          <IconButton
             onClick={handleCopyText}
-            disabled={!hasTranscription || retrying}
+            disabled={!hasTranscription || retrying || editing || savingEdit}
             title={t("settings.history.copyToClipboard")}
           >
             {showCopied ? (
@@ -371,7 +456,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </IconButton>
           <IconButton
             onClick={onToggleSaved}
-            disabled={retrying}
+            disabled={retrying || editing || savingEdit}
             active={entry.saved}
             title={
               entry.saved
@@ -387,7 +472,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </IconButton>
           <IconButton
             onClick={handleRetranscribe}
-            disabled={retrying}
+            disabled={retrying || editing || savingEdit}
             title={t("settings.history.retranscribe")}
           >
             <RotateCcw
@@ -402,7 +487,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </IconButton>
           <IconButton
             onClick={handleDeleteEntry}
-            disabled={retrying}
+            disabled={retrying || editing || savingEdit}
             title={t("settings.history.delete")}
           >
             <Trash2 width={16} height={16} />
@@ -410,34 +495,97 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         </div>
       </div>
 
-      <p
-        className={`italic text-sm pb-2 ${
-          retrying
-            ? ""
-            : hasTranscription
-              ? "text-text/90 select-text cursor-text whitespace-pre-wrap break-words"
-              : "text-text/40"
-        }`}
-        style={
-          retrying
-            ? { animation: "transcribe-pulse 3s ease-in-out infinite" }
-            : undefined
-        }
-      >
-        {retrying && (
-          <style>{`
-            @keyframes transcribe-pulse {
-              0%, 100% { color: color-mix(in srgb, var(--color-text) 40%, transparent); }
-              50% { color: color-mix(in srgb, var(--color-text) 90%, transparent); }
+      {editing ? (
+        <div className="space-y-3">
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-text/60">
+              {t("settings.history.transcriptionLabel")}
+            </span>
+            <textarea
+              value={draftTranscription}
+              onChange={(event) => setDraftTranscription(event.target.value)}
+              disabled={savingEdit}
+              rows={4}
+              className="w-full resize-y rounded-md border border-mid-gray/30 bg-background px-3 py-2 text-sm text-text outline-none focus:border-logo-primary"
+            />
+          </label>
+          {hasPostProcessedField && (
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-text/60">
+                {t("settings.history.postProcessedLabel")}
+              </span>
+              <textarea
+                value={draftPostProcessed}
+                onChange={(event) => setDraftPostProcessed(event.target.value)}
+                disabled={savingEdit}
+                rows={4}
+                className="w-full resize-y rounded-md border border-mid-gray/30 bg-background px-3 py-2 text-sm text-text outline-none focus:border-logo-primary"
+              />
+            </label>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleCancelEdit}
+              disabled={savingEdit}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleSaveEdit}
+              disabled={savingEdit || draftTranscription.trim().length === 0}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p
+            className={`italic text-sm pb-2 ${
+              retrying
+                ? ""
+                : hasTranscription
+                  ? "text-text/90 select-text cursor-text whitespace-pre-wrap break-words"
+                  : "text-text/40"
+            }`}
+            style={
+              retrying
+                ? { animation: "transcribe-pulse 3s ease-in-out infinite" }
+                : undefined
             }
-          `}</style>
-        )}
-        {retrying
-          ? t("settings.history.transcribing")
-          : hasTranscription
-            ? entry.transcription_text
-            : t("settings.history.transcriptionFailed")}
-      </p>
+          >
+            {retrying && (
+              <style>{`
+                @keyframes transcribe-pulse {
+                  0%, 100% { color: color-mix(in srgb, var(--color-text) 40%, transparent); }
+                  50% { color: color-mix(in srgb, var(--color-text) 90%, transparent); }
+                }
+              `}</style>
+            )}
+            {retrying
+              ? t("settings.history.transcribing")
+              : hasTranscription
+                ? entry.transcription_text
+                : t("settings.history.transcriptionFailed")}
+          </p>
+          {entry.post_processed_text?.trim() && (
+            <div className="rounded-md bg-mid-gray/5 border border-mid-gray/15 px-3 py-2">
+              <p className="text-xs font-medium text-text/50 mb-1">
+                {t("settings.history.postProcessedLabel")}
+              </p>
+              <p className="text-sm text-text/80 select-text cursor-text whitespace-pre-wrap break-words">
+                {entry.post_processed_text}
+              </p>
+            </div>
+          )}
+        </>
+      )}
 
       <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
     </div>

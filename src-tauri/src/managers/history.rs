@@ -585,6 +585,36 @@ impl HistoryManager {
         self.recordings_dir.join(file_name)
     }
 
+    pub fn get_recent_completed_entries(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.get_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                id,
+                file_name,
+                timestamp,
+                saved,
+                title,
+                transcription_text,
+                post_processed_text,
+                post_process_prompt,
+                post_process_requested
+             FROM transcription_history
+             WHERE transcription_text != ''
+             ORDER BY timestamp DESC, id DESC
+             LIMIT ?1",
+        )?;
+
+        let entries = stmt
+            .query_map(params![limit.min(20) as i64], Self::map_history_entry)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
     pub async fn get_entry_by_id(&self, id: i64) -> Result<Option<HistoryEntry>> {
         let conn = self.get_connection()?;
         let mut stmt = conn.prepare(
@@ -603,6 +633,54 @@ impl HistoryManager {
         )?;
 
         let entry = stmt.query_row([id], Self::map_history_entry).optional()?;
+
+        Ok(entry)
+    }
+
+    pub fn edit_entry_text(
+        &self,
+        id: i64,
+        transcription_text: String,
+        post_processed_text: Option<String>,
+    ) -> Result<HistoryEntry> {
+        let transcription_text = transcription_text.trim().to_string();
+        if transcription_text.is_empty() {
+            return Err(anyhow!("Transcription text cannot be empty"));
+        }
+
+        let post_processed_text = post_processed_text
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+
+        let conn = self.get_connection()?;
+        let updated = conn.execute(
+            "UPDATE transcription_history
+             SET transcription_text = ?1,
+                 post_processed_text = ?2
+             WHERE id = ?3",
+            params![transcription_text, post_processed_text, id],
+        )?;
+
+        if updated == 0 {
+            return Err(anyhow!("History entry {} not found", id));
+        }
+
+        let entry = conn.query_row(
+            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+             FROM transcription_history WHERE id = ?1",
+            params![id],
+            Self::map_history_entry,
+        )?;
+
+        debug!("Edited history entry text for id {}", id);
+
+        if let Err(e) = (HistoryUpdatePayload::Updated {
+            entry: entry.clone(),
+        })
+        .emit(&self.app_handle)
+        {
+            error!("Failed to emit history-updated event: {}", e);
+        }
 
         Ok(entry)
     }

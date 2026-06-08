@@ -20,25 +20,25 @@ type LocalPresetValues = {
 
 const LOCAL_PRESET_VALUES: Record<Exclude<LocalPresetKey, "custom">, LocalPresetValues> = {
   fast: {
-    maxTokens: 128,
+    maxTokens: 384,
     temperature: 0.04,
     topP: 0.72,
     repetitionPenalty: 1.12,
-    repetitionContextSize: 128,
+    repetitionContextSize: 160,
   },
   balanced: {
-    maxTokens: 192,
+    maxTokens: 768,
     temperature: 0.07,
     topP: 0.82,
     repetitionPenalty: 1.15,
-    repetitionContextSize: 160,
+    repetitionContextSize: 224,
   },
   quality: {
-    maxTokens: 288,
+    maxTokens: 1280,
     temperature: 0.1,
     topP: 0.9,
     repetitionPenalty: 1.18,
-    repetitionContextSize: 192,
+    repetitionContextSize: 256,
   },
 };
 
@@ -52,7 +52,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
   const { getSetting, updateSetting, isUpdating } = useSettings();
 
   const currentLocalMaxTokens = Number(
-    getSetting("post_process_local_max_tokens") || 192,
+    getSetting("post_process_local_max_tokens") || 768,
   );
   const currentLocalTemperature = Number(
     getSetting("post_process_local_temperature") || 0.07,
@@ -62,7 +62,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
     getSetting("post_process_local_repetition_penalty") || 1.15,
   );
   const currentLocalRepetitionContextSize = Number(
-    getSetting("post_process_local_repetition_context_size") || 160,
+    getSetting("post_process_local_repetition_context_size") || 224,
   );
   const currentLocalQuality = (
     getSetting("post_process_quality") || "balanced"
@@ -306,7 +306,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
           <Input
             type="number"
             min={64}
-            max={512}
+            max={2048}
             step={1}
             value={maxTokensDraft}
             onChange={(e) => {
@@ -316,7 +316,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 next,
                 currentLocalMaxTokens,
                 64,
-                512,
+                2048,
                 markCustom,
                 (v) => void updateSetting("post_process_local_max_tokens", v),
               );
@@ -326,7 +326,7 @@ export const LocalPostProcessAdvancedSettings: React.FC<
                 maxTokensDraft,
                 currentLocalMaxTokens,
                 64,
-                512,
+                2048,
                 setMaxTokensDraft,
                 markCustom,
                 (v) => void updateSetting("post_process_local_max_tokens", v),

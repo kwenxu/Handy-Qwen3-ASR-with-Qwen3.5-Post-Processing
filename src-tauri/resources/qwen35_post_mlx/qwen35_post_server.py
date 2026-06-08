@@ -112,11 +112,11 @@ def clean_output(text: str) -> str:
 def process_text(
     text: str,
     system_prompt: str,
-    max_tokens: int = 256,
-    temperature: float = 0.0,
-    top_p: float = 0.0,
-    repetition_penalty: float = 1.16,
-    repetition_context_size: int = 96,
+    max_tokens: int = 768,
+    temperature: float = 0.07,
+    top_p: float = 0.82,
+    repetition_penalty: float = 1.15,
+    repetition_context_size: int = 224,
 ) -> str:
     model, tokenizer = load_model_once()
 
@@ -133,7 +133,7 @@ def process_text(
         model,
         tokenizer,
         prompt=prompt,
-        max_tokens=max_tokens,
+        max_tokens=max(1, min(int(max_tokens), 2048)),
         sampler=sampler,
         logits_processors=logits_processors,
         verbose=False,
@@ -170,11 +170,11 @@ def main():
             req = json.loads(line)
             text = str(req.get("text", ""))
             system_prompt = str(req.get("system_prompt", ""))
-            max_tokens = int(req.get("max_tokens", 256) or 256)
-            temperature = float(req.get("temperature", 0.0) or 0.0)
-            top_p = float(req.get("top_p", 0.0) or 0.0)
-            repetition_penalty = float(req.get("repetition_penalty", 1.16) or 1.16)
-            repetition_context_size = int(req.get("repetition_context_size", 96) or 96)
+            max_tokens = int(req.get("max_tokens", 768) or 768)
+            temperature = float(req.get("temperature", 0.07) or 0.07)
+            top_p = float(req.get("top_p", 0.82) or 0.82)
+            repetition_penalty = float(req.get("repetition_penalty", 1.15) or 1.15)
+            repetition_context_size = int(req.get("repetition_context_size", 224) or 224)
 
             processed = process_text(
                 text=text,

@@ -553,6 +553,20 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_zh_leaves_oral_phrases_for_model_post_process() {
+        let text = "嗯这个吧，我也不知道怎么说，就是感觉不是特别好，懂我意思吗？";
+        let result = filter_transcription_output(text, "zh-Hans", &None);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_filter_zh_preserves_referential_zhege() {
+        let text = "这个功能确实不错";
+        let result = filter_transcription_output(text, "zh", &None);
+        assert_eq!(result, "这个功能确实不错");
+    }
+
+    #[test]
     fn test_apply_custom_words_ngram_two_words() {
         let text = "il cui nome è Charge B, che permette";
         let custom_words = vec!["ChargeBee".to_string()];

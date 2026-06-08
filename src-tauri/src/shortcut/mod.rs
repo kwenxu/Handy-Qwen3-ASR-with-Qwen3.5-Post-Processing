@@ -242,15 +242,19 @@ RULE_HEADER_RE = re.compile(
 ENUM_LINE_RE = re.compile(r"^\s*\d+\s*[\.、\)\]]\s*(.*)$")
 MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
 MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+NOISE_LATIN_A_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])a{2,}(?:[-—~!！?？]+)?(?![A-Za-z0-9])"
+)
 LEAK_KEYWORDS = (
-    "保持原意",
-    "去除口头重复",
-    "专有名词",
-    "仅输出最终结果",
+    "只输出最终",
+    "仅输出最终",
     "不要解释",
+    "不要复述",
+    "不执行摘要",
     "output contract",
     "return only the final",
     "do not include reasoning",
+    "do not summarize",
 )
 
 
@@ -333,6 +337,27 @@ def collapse_repeated_lines(text: str, threshold: int) -> str:
     return "\n".join(out)
 
 
+def is_probable_template_rule(line: str) -> bool:
+    lower = line.lower()
+    matched = ENUM_LINE_RE.match(line)
+    body = matched.group(1).strip().lower() if matched else lower
+    if matched and any(key in body for key in LEAK_KEYWORDS):
+        return True
+    if matched and (
+        body.startswith("只处理")
+        or body.startswith("当前转录")
+        or body.startswith("保留全部")
+        or body.startswith("短文本保护")
+        or body.startswith("排版策略")
+        or body.startswith("数字规范")
+        or body.startswith("only process")
+        or body.startswith("preserve")
+        or body.startswith("return only")
+    ):
+        return True
+    return False
+
+
 def strip_template_leakage(text: str) -> Tuple[str, bool]:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
@@ -351,13 +376,18 @@ def strip_template_leakage(text: str) -> Tuple[str, bool]:
         if any(marker in lower for marker in ("begin_transcript", "end_transcript")):
             removed += 1
             continue
-        matched = ENUM_LINE_RE.match(line)
-        if matched:
-            body = matched.group(1).strip().lower()
-            if any(key in body for key in LEAK_KEYWORDS):
-                removed += 1
-                continue
-        if any(key in lower for key in LEAK_KEYWORDS):
+        if any(
+            marker in lower
+            for marker in (
+                "optional_context_hints",
+                "end_optional_context_hints",
+                "optional_history_context",
+                "user_history_context",
+            )
+        ):
+            removed += 1
+            continue
+        if is_probable_template_rule(line):
             removed += 1
             continue
         kept.append(line)
@@ -375,8 +405,24 @@ def normalize_spacing(text: str) -> str:
     return text.strip()
 
 
+def is_degenerate_text(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    informative = [ch.lower() for ch in stripped if ch.isalnum() or "\u4e00" <= ch <= "\u9fff"]
+    if not informative:
+        return True
+    unique = set(informative)
+    if len(informative) <= 4 and len(unique) <= 2:
+        return True
+    if len(informative) >= 2 and len(unique) == 1:
+        return True
+    return False
+
+
 def process_llm_text(text: str) -> Tuple[str, List[str]]:
     warnings: List[str] = []
+    original = normalize_spacing(text)
     out = text
 
     next_out = collapse_char_repeats(out, CHAR_REPEAT_THRESHOLD)
@@ -387,6 +433,11 @@ def process_llm_text(text: str) -> Tuple[str, List[str]]:
     next_out = collapse_pattern_repeats(out, PATTERN_REPEAT_THRESHOLD, PATTERN_MAX_LEN)
     if next_out != out:
         warnings.append("collapse_pattern_repeats")
+        out = next_out
+
+    next_out = NOISE_LATIN_A_RE.sub(" ", out)
+    if next_out != out:
+        warnings.append("remove_noise_a_tokens")
         out = next_out
 
     next_out, removed_template = strip_template_leakage(out)
@@ -402,6 +453,12 @@ def process_llm_text(text: str) -> Tuple[str, List[str]]:
         out = next_out
 
     out = normalize_spacing(out)
+    if not out and original:
+        warnings.append("fallback_original_after_empty_cleanup")
+        return original, warnings
+    if is_degenerate_text(out) and not is_degenerate_text(original):
+        warnings.append("fallback_original_after_degenerate_cleanup")
+        return original, warnings
     return out, warnings
 
 
@@ -1652,7 +1709,7 @@ pub fn change_post_process_local_max_tokens_setting(
     value: usize,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    settings.post_process_local_max_tokens = value.clamp(64, 512);
+    settings.post_process_local_max_tokens = value.clamp(64, 2048);
     settings::write_settings(&app, settings);
     Ok(())
 }

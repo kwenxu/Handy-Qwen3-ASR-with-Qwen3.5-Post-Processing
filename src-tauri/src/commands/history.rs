@@ -1,6 +1,6 @@
 use crate::actions::process_transcription_output;
 use crate::managers::{
-    history::{HistoryManager, PaginatedHistory},
+    history::{HistoryEntry, HistoryManager, PaginatedHistory},
     transcription::TranscriptionManager,
 };
 use std::sync::Arc;
@@ -56,6 +56,20 @@ pub async fn delete_history_entry(
     history_manager
         .delete_entry(id)
         .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_history_entry_text(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    id: i64,
+    transcription_text: String,
+    post_processed_text: Option<String>,
+) -> Result<HistoryEntry, String> {
+    history_manager
+        .edit_entry_text(id, transcription_text, post_processed_text)
         .map_err(|e| e.to_string())
 }
 
